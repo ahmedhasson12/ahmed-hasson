@@ -1,0 +1,44 @@
+{
+  "name": "سجل المناوبات — إدارة دوام وحضور المناوبين",
+  "short_name": "سجل المناوبات",
+  "description": "إدارة دوام المناوبين بنظام 24 ساعة دوام و3 أيام استراحة، مع البصمات الأربع وحساب الساعات الإضافية وكشف شهري جاهز للطباعة.",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "shift-attendance-ar",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#f3f5f3",
+  "theme_color": "#22705f",
+  "categories": ["productivity", "business", "utilities"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "لوحة اليوم",
+      "short_name": "اليوم",
+      "description": "تسجيل البصمات السريعة لدوام اليوم",
+      "url": "./index.html#today",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "كشف الساعات",
+      "short_name": "الكشف",
+      "description": "استخراج التايم شيت الشهري للطباعة",
+      "url": "./index.html#sheet",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "الجدول الشهري",
+      "short_name": "الجدول",
+      "description": "تقويم أيام الدوام والاستراحة",
+      "url": "./index.html#calendar",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

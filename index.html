@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>سجل المناوبات</title>
+<meta name="description" content="إدارة دوام المناوبين بنظام 24 ساعة دوام و3 أيام استراحة، مع البصمات الأربع وحساب الساعات الإضافية وكشف شهري للطباعة.">
+<meta name="theme-color" content="#22705f" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101614" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="سجل المناوبات">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  html{height:100%}
+  body{min-height:100%;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);-webkit-tap-highlight-color:rgba(34,112,95,.15)}
+  img{max-width:100%}
+  [hidden]{display:none!important}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<style>
+  :root{
+    color-scheme: light;
+    --bg:#f3f5f3;
+    --surface:#ffffff;
+    --surface-2:#eef2ef;
+    --ink:#16221f;
+    --muted:#5f716c;
+    --line:#dde4e0;
+    --accent:#22705f;
+    --accent-ink:#ffffff;
+    --accent-soft:#e0efe9;
+    --warn:#9a5b10;
+    --warn-soft:#fbecd7;
+    --danger:#9d3434;
+    --danger-soft:#f8e3e3;
+    --shadow:0 1px 2px rgba(16,34,30,.06), 0 8px 24px -16px rgba(16,34,30,.25);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      color-scheme: dark;
+      --bg:#101614;
+      --surface:#18211e;
+      --surface-2:#1f2a26;
+      --ink:#e6eeea;
+      --muted:#9aaba5;
+      --line:#2a3733;
+      --accent:#4fae96;
+      --accent-ink:#06120f;
+      --accent-soft:#1c322c;
+      --warn:#e0a85c;
+      --warn-soft:#33281a;
+      --danger:#e08a8a;
+      --danger-soft:#33201f;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 26px -18px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --bg:#101614;
+    --surface:#18211e;
+    --surface-2:#1f2a26;
+    --ink:#e6eeea;
+    --muted:#9aaba5;
+    --line:#2a3733;
+    --accent:#4fae96;
+    --accent-ink:#06120f;
+    --accent-soft:#1c322c;
+    --warn:#e0a85c;
+    --warn-soft:#33281a;
+    --danger:#e08a8a;
+    --danger-soft:#33201f;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 26px -18px rgba(0,0,0,.8);
+  }
+
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"IBM Plex Sans Arabic","Tajawal",system-ui,"Segoe UI",sans-serif;
+    font-size:15px;
+    line-height:1.7;
+    -webkit-text-size-adjust:100%;
+  }
+  h1,h2,h3,.display{font-family:"Cairo","IBM Plex Sans Arabic",system-ui,sans-serif;font-weight:700;text-wrap:balance;letter-spacing:0}
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;direction:ltr;display:inline-block}
+  .wrap{max-width:1140px;margin-inline:auto;padding-inline:16px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+  .soft{background:var(--surface-2);border:1px solid var(--line);border-radius:12px}
+  .label{font-size:12px;letter-spacing:.06em;color:var(--muted);font-weight:600}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:10px;padding:8px 14px;font-weight:600;font-size:14px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;transition:.15s ease;line-height:1.3}
+  .btn:hover{border-color:var(--accent)}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+  .btn-primary:hover{filter:brightness(1.07)}
+  .btn-ghost{background:transparent}
+  .btn-danger{color:var(--danger);border-color:var(--danger)}
+  .btn-sm{padding:5px 10px;font-size:13px;border-radius:9px}
+  input,select,textarea{font-family:inherit;font-size:14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px 10px;width:100%}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:var(--accent)}
+  input[type="time"],input[type="date"]{font-variant-numeric:tabular-nums}
+  .pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;border:1px solid transparent}
+  .pill-duty{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+  .pill-rest{background:var(--surface-2);color:var(--muted);border-color:var(--line)}
+  .pill-ot{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+  .tab{padding:10px 14px;border-radius:10px;font-weight:600;font-size:14px;color:var(--muted);cursor:pointer;white-space:nowrap;border:1px solid transparent;background:transparent}
+  .tab[aria-selected="true"]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:9px 10px;text-align:center;border-bottom:1px solid var(--line)}
+  th{font-size:12px;color:var(--muted);font-weight:600;background:var(--surface-2)}
+  tbody tr:last-child td{border-bottom:none}
+  .scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .cal-cell{border:1px solid var(--line);border-radius:10px;min-height:62px;padding:6px;display:flex;flex-direction:column;gap:4px;background:var(--surface)}
+  .cal-duty{background:var(--accent-soft);border-color:var(--accent)}
+  .cal-otday{background:var(--warn-soft);border-color:var(--warn)}
+  .cal-today{outline:2px solid var(--accent);outline-offset:1px}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .sig-line{border-top:1px dashed var(--muted);padding-top:6px;font-size:12px;color:var(--muted);text-align:center}
+  .paper{background:var(--surface);border:1px solid var(--line);border-radius:14px}
+  @media print{
+    body{background:#fff;color:#000;font-size:12px}
+    .no-print{display:none!important}
+    .paper{border:none;box-shadow:none;border-radius:0}
+    .wrap{padding:0;max-width:none}
+    th{background:#f0f0f0!important;color:#000!important}
+    th,td{border-bottom:1px solid #999}
+    .pill{border:1px solid #666;color:#000!important;background:#fff!important}
+  }
+</style>
+
+<div id="app" dir="rtl" lang="ar">
+  <header class="no-print" style="position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:var(--surface);border-bottom:1px solid var(--line)">
+    <div class="wrap" style="padding-block:12px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:38px;height:38px;border-radius:11px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-weight:700;font-family:Cairo,sans-serif">٢٤</div>
+          <div>
+            <h1 style="font-size:18px;margin:0;line-height:1.3">سجل المناوبات</h1>
+            <div style="font-size:12px;color:var(--muted)">دوام ٢٤ ساعة · ٣ أيام استراحة</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <span id="netPill" class="pill pill-ot" hidden>غير متصل</span><button class="btn btn-sm btn-primary" id="installBtn" hidden>تثبيت التطبيق</button><button class="btn btn-sm" data-act="backup">نسخة احتياطية</button>
+          <button class="btn btn-sm" data-act="restore-open">استعادة</button>
+        </div>
+      </div>
+      <nav role="tablist" style="display:flex;gap:6px;margin-top:10px;overflow-x:auto" id="tabs">
+        <button class="tab" role="tab" data-tab="today">لوحة اليوم</button>
+        <button class="tab" role="tab" data-tab="staff">الموظفون</button>
+        <button class="tab" role="tab" data-tab="calendar">الجدول الشهري</button>
+        <button class="tab" role="tab" data-tab="sheet">كشف الساعات</button>
+      </nav>
+    </div>
+  </header>
+
+  <div id="iosHint" class="wrap no-print" hidden style="padding-block:10px 0"><div class="soft" style="padding:10px 12px;font-size:13px;display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span>لتثبيت التطبيق على الآيفون: زر المشاركة ← «إضافة إلى الشاشة الرئيسية».</span><button class="btn btn-sm" id="iosHintClose">إخفاء</button></div></div>
+  <main class="wrap" id="view" style="padding-block:18px 48px"></main>
+
+  <div id="modal" class="no-print" hidden style="position:fixed;inset:0;background:rgba(10,20,18,.55);z-index:60;display:grid;place-items:center;padding:16px">
+    <div class="card" style="max-width:520px;width:100%;padding:18px" id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  document.documentElement.setAttribute("dir","rtl");
+  document.documentElement.setAttribute("lang","ar");
+
+  /* ============ التخزين ============ */
+  var KEY = "shift_attendance_v1";
+  var state = { employees:[], records:{}, demo:false };
+  var ui = { tab:"today", day:todayStr(), calMonth:monthStr(new Date()), calEmp:"all",
+             sheetEmp:"", sheetMonth:monthStr(new Date()), editing:null, confirmDel:null };
+
+  function load(){
+    try{
+      var raw = localStorage.getItem(KEY);
+      if(raw){ var d = JSON.parse(raw); if(d && d.employees){ state = { employees:d.employees||[], records:d.records||{}, demo:!!d.demo }; return true; } }
+    }catch(e){}
+    return false;
+  }
+  function save(){
+    try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){}
+  }
+
+  /* ============ أدوات التاريخ ============ */
+  var DAYS_AR = ["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
+  var MONTHS_AR = ["كانون الثاني","شباط","آذار","نيسان","أيار","حزيران","تموز","آب","أيلول","تشرين الأول","تشرين الثاني","كانون الأول"];
+  var SLOTS = [
+    {i:0, name:"البصمة الصباحية", hint:"بداية الدوام"},
+    {i:1, name:"البصمة الوسطية", hint:"منتصف الوجبة"},
+    {i:2, name:"البصمة الليلية", hint:"مساءً"},
+    {i:3, name:"بصمة صباح اليوم التالي", hint:"نهاية الدوام"}
+  ];
+
+  function pad(n){ return String(n).padStart(2,"0"); }
+  function key(dt){ return dt.getFullYear()+"-"+pad(dt.getMonth()+1)+"-"+pad(dt.getDate()); }
+  function todayStr(){ return key(new Date()); }
+  function monthStr(dt){ return dt.getFullYear()+"-"+pad(dt.getMonth()+1); }
+  function parseD(s){ var p = String(s||"").split("-").map(Number); return new Date(p[0], p[1]-1, p[2], 12, 0, 0); }
+  function addDays(s, n){ var d = parseD(s); d.setDate(d.getDate()+n); return key(d); }
+  function diffDays(a, b){ return Math.round((parseD(b) - parseD(a)) / 86400000); }
+  function dayName(s){ return DAYS_AR[parseD(s).getDay()]; }
+  function fmtDate(s){ var d = parseD(s); return d.getDate()+" "+MONTHS_AR[d.getMonth()]+" "+d.getFullYear(); }
+  function nowHM(){ var d = new Date(); return pad(d.getHours())+":"+pad(d.getMinutes()); }
+  function mins(hm){ if(!hm) return null; var p = hm.split(":").map(Number); return p[0]*60 + p[1]; }
+  function fmtH(m){ if(!m || m<=0) return "0:00"; return Math.floor(m/60)+":"+pad(m%60); }
+
+  /* ============ منطق الدوريات ============ */
+  function isDutyDay(emp, ds){
+    if(!emp || !emp.startDate) return false;
+    var d = diffDays(emp.startDate, ds);
+    return ((d % 4) + 4) % 4 === 0;
+  }
+  function rkey(id, ds){ return id + "|" + ds; }
+  function getRec(id, ds){ return state.records[rkey(id,ds)] || null; }
+  function ensureRec(id, ds, type){
+    var k = rkey(id,ds);
+    if(!state.records[k]) state.records[k] = { type:type, t:[null,null,null,null] };
+    return state.records[k];
+  }
+  function dropIfEmpty(id, ds){
+    var k = rkey(id,ds), r = state.records[k];
+    if(r && !r.t.some(Boolean)) delete state.records[k];
+  }
+
+  // وجبة الدوام: الأساس 24 ساعة، وما بعدها ساعات إضافية
+  function dutyStats(rec){
+    var out = { started:false, complete:false, base:0, ot:0, short:0, dur:0 };
+    if(!rec) return out;
+    var t1 = mins(rec.t[0]), t4 = mins(rec.t[3]);
+    out.started = t1 !== null;
+    if(t1 === null || t4 === null) return out;
+    out.complete = true;
+    var dur = (t4 + 24*60) - t1;      // البصمة الرابعة في صباح اليوم التالي
+    out.dur = dur;
+    out.base = Math.min(dur, 24*60);
+    out.ot = Math.max(dur - 24*60, 0);
+    out.short = Math.max(24*60 - dur, 0);
+    return out;
+  }
+  // الدوام في يوم الاستراحة: كل الساعات إضافية
+  function restStats(rec){
+    var out = { started:false, complete:false, ot:0 };
+    if(!rec) return out;
+    var a = mins(rec.t[0]), b = mins(rec.t[3]);
+    out.started = a !== null;
+    if(a === null || b === null) return out;
+    out.complete = true;
+    var dur = b - a; if(dur <= 0) dur += 24*60;
+    out.ot = dur;
+    return out;
+  }
+
+  function getEmp(id){ for(var i=0;i<state.employees.length;i++){ if(state.employees[i].id===id) return state.employees[i]; } return null; }
+
+  function monthReport(empId, ym){
+    var emp = getEmp(empId);
+    var y = Number(ym.split("-")[0]), m = Number(ym.split("-")[1]) - 1;
+    var last = new Date(y, m+1, 0).getDate();
+    var rows = [], scheduled = 0, worked = 0, restWorked = 0, base = 0, ot = 0, openShifts = 0;
+    for(var d=1; d<=last; d++){
+      var ds = key(new Date(y, m, d, 12));
+      var duty = isDutyDay(emp, ds);
+      var rec = getRec(empId, ds);
+      if(duty) scheduled++;
+      if(!duty && !rec) continue;
+      var row = { date:ds, duty:duty, rec:rec, base:0, ot:0, note:"" };
+      if(duty){
+        var s = dutyStats(rec);
+        if(s.started) worked++;
+        if(s.complete){
+          row.base = s.base; row.ot = s.ot;
+          base += s.base; ot += s.ot;
+          if(s.ot > 0) row.note = "إضافي بعد ٢٤ ساعة";
+          else if(s.short > 0) row.note = "نقص " + fmtH(s.short);
+          else row.note = "مكتملة";
+        } else if(s.started){ row.note = "وجبة غير مكتملة"; openShifts++; }
+        else row.note = rec ? "بصمات ناقصة" : "بدون بصمات";
+      } else {
+        var r = restStats(rec);
+        if(r.started) restWorked++;
+        if(r.complete){ row.ot = r.ot; ot += r.ot; row.note = "دوام في يوم استراحة"; }
+        else row.note = "تسجيل غير مكتمل";
+      }
+      rows.push(row);
+    }
+    return { emp:emp, ym:ym, rows:rows, scheduled:scheduled, worked:worked, restWorked:restWorked,
+             base:base, ot:ot, total:base+ot, openShifts:openShifts };
+  }
+
+  /* ============ بيانات تجريبية ============ */
+  function seedDemo(){
+    var t = todayStr();
+    var e1 = { id:"e1", name:"أحمد كاظم عبد", dept:"شعبة الصيانة", startDate:t };
+    var e2 = { id:"e2", name:"حسين عبد الله جبر", dept:"شعبة الحراسات", startDate:addDays(t,-1) };
+    var e3 = { id:"e3", name:"زينب محمد علي", dept:"شعبة السيطرة", startDate:addDays(t,-2) };
+    state.employees = [e1,e2,e3];
+    state.records = {};
+    // وجبة سابقة مكتملة مع ساعة ونصف إضافية
+    state.records[rkey("e1", addDays(t,-4))] = { type:"duty", t:["07:00","14:10","22:05","08:30"] };
+    // وجبة سابقة مكتملة تماماً
+    state.records[rkey("e2", addDays(t,-5))] = { type:"duty", t:["07:05","14:00","22:00","07:05"] };
+    // دوام في يوم استراحة
+    state.records[rkey("e3", addDays(t,-3))] = { type:"rest", t:["08:00",null,null,"13:30"] };
+    state.demo = true;
+    save();
+  }
+
+  /* ============ عرض الواجهات ============ */
+  var view = document.getElementById("view");
+
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]; }); }
+
+  function render(){
+    document.querySelectorAll("#tabs .tab").forEach(function(b){
+      b.setAttribute("aria-selected", b.dataset.tab === ui.tab ? "true" : "false");
+    });
+    if(ui.tab === "today") view.innerHTML = viewToday();
+    else if(ui.tab === "staff") view.innerHTML = viewStaff();
+    else if(ui.tab === "calendar") view.innerHTML = viewCalendar();
+    else view.innerHTML = viewSheet();
+  }
+
+  function demoBanner(){
+    if(!state.demo) return "";
+    return '<div class="soft no-print" style="padding:10px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div style="font-size:13px;color:var(--muted)">البيانات المعروضة تجريبية للتوضيح — امسحها قبل إدخال موظفيك.</div>'+
+      '<button class="btn btn-sm btn-danger" data-act="clear-demo">مسح البيانات التجريبية</button></div>';
+  }
+
+  /* ---------- لوحة اليوم ---------- */
+  function viewToday(){
+    var d = ui.day;
+    var onDuty = [], ending = [], resting = [];
+    state.employees.forEach(function(e){
+      if(isDutyDay(e, d)) onDuty.push(e);
+      else if(isDutyDay(e, addDays(d,-1))) ending.push(e);
+      else resting.push(e);
+    });
+
+    var h = demoBanner();
+    h += '<section class="card" style="padding:14px;margin-bottom:16px">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'+
+        '<div><div class="label">اليوم المعروض</div>'+
+        '<div class="display" style="font-size:17px">'+ dayName(d) +' · <span class="num">'+ fmtDate(d) +'</span></div></div>'+
+        '<div style="display:flex;gap:6px;align-items:center">'+
+          '<button class="btn btn-sm" data-act="day" data-v="-1">اليوم السابق</button>'+
+          '<button class="btn btn-sm" data-act="day" data-v="0">اليوم</button>'+
+          '<button class="btn btn-sm" data-act="day" data-v="1">اليوم التالي</button>'+
+        '</div></div></section>';
+
+    if(!state.employees.length){
+      return h + emptyState("لا يوجد موظفون بعد", "أضف أول موظف من تبويب «الموظفون» وحدّد تاريخ أول يوم دوام له.");
+    }
+
+    h += sectionTitle("في الدوام اليوم", onDuty.length + " موظف");
+    h += onDuty.length ? onDuty.map(function(e){ return dutyCard(e, d, false); }).join("")
+       : emptyState("لا أحد في الدوام هذا اليوم", "حسب دورية ١ دوام / ٣ استراحة.");
+
+    if(ending.length){
+      h += sectionTitle("بصمة نهاية وجبة الأمس", "بصمة صباح اليوم التالي");
+      h += ending.map(function(e){ return dutyCard(e, addDays(d,-1), true); }).join("");
+    }
+
+    h += sectionTitle("في الاستراحة", resting.length + " موظف");
+    h += resting.length ? resting.map(function(e){ return restCard(e, d); }).join("")
+       : '<div class="soft" style="padding:12px;color:var(--muted);font-size:13px;margin-bottom:12px">لا يوجد موظف في الاستراحة اليوم.</div>';
+    return h;
+  }
+
+  function sectionTitle(t, sub){
+    return '<div style="display:flex;align-items:baseline;gap:10px;margin:18px 0 10px">'+
+      '<h2 style="font-size:15px;margin:0">'+ esc(t) +'</h2>'+
+      '<span style="font-size:12px;color:var(--muted)">'+ esc(sub) +'</span></div>';
+  }
+  function emptyState(t, s){
+    return '<div class="soft" style="padding:20px;text-align:center;margin-bottom:12px">'+
+      '<div class="display" style="font-size:15px;margin-bottom:4px">'+ esc(t) +'</div>'+
+      '<div style="font-size:13px;color:var(--muted)">'+ esc(s) +'</div></div>';
+  }
+
+  function dutyCard(emp, shiftDate, isEnding){
+    var rec = getRec(emp.id, shiftDate);
+    var s = dutyStats(rec);
+    var nextEmpty = -1;
+    for(var i=0;i<4;i++){ if(!(rec && rec.t[i])){ nextEmpty = i; break; } }
+
+    var chips = SLOTS.map(function(sl){
+      var val = rec ? rec.t[sl.i] : null;
+      var dateNote = sl.i === 3 ? '<span style="font-size:11px;color:var(--muted)"> ('+ dayName(addDays(shiftDate,1)) +')</span>' : "";
+      return '<div class="soft" style="padding:9px;display:flex;flex-direction:column;gap:6px">'+
+        '<div style="font-size:12px;font-weight:600">'+ esc(sl.name) + dateNote +'</div>'+
+        '<div style="display:flex;gap:6px;align-items:center">'+
+          '<input type="time" id="t_'+ emp.id +'_'+ shiftDate +'_'+ sl.i +'" value="'+ (val||"") +'" data-act="settime" data-emp="'+ emp.id +'" data-date="'+ shiftDate +'" data-slot="'+ sl.i +'" data-type="duty" style="flex:1">'+
+          '<button class="btn btn-sm" data-act="now" data-emp="'+ emp.id +'" data-date="'+ shiftDate +'" data-slot="'+ sl.i +'" data-type="duty" title="تسجيل الوقت الحالي">الآن</button>'+
+        '</div></div>';
+    }).join("");
+
+    var status;
+    if(s.complete && s.ot > 0) status = '<span class="pill pill-ot">إضافي <span class="num">'+ fmtH(s.ot) +'</span></span>';
+    else if(s.complete) status = '<span class="pill pill-duty">وجبة مكتملة</span>';
+    else if(s.started) status = '<span class="pill pill-duty">الوجبة جارية</span>';
+    else status = '<span class="pill pill-rest">بانتظار البصمة</span>';
+
+    var quick = nextEmpty >= 0
+      ? '<button class="btn btn-primary" data-act="now" data-emp="'+ emp.id +'" data-date="'+ shiftDate +'" data-slot="'+ nextEmpty +'" data-type="duty">بصمة سريعة · '+ esc(SLOTS[nextEmpty].name) +'</button>'
+      : '<span class="pill pill-duty">اكتملت البصمات الأربع</span>';
+
+    return '<article class="card" style="padding:14px;margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">'+
+        '<div><div class="display" style="font-size:16px">'+ esc(emp.name) +'</div>'+
+        '<div style="font-size:12px;color:var(--muted)">'+ esc(emp.dept||"—") +
+        (isEnding ? ' · وجبة <span class="num">'+ fmtDate(shiftDate) +'</span>' : '') +'</div></div>'+
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+ status +
+        (s.complete ? '<span class="pill pill-rest">أساسي <span class="num">'+ fmtH(s.base) +'</span></span>' : '') +'</div>'+
+      '</div>'+
+      '<div style="margin:12px 0">'+ quick +'</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">'+ chips +'</div>'+
+      '</article>';
+  }
+
+  function restCard(emp, d){
+    var rec = getRec(emp.id, d);
+    var r = restStats(rec);
+    var open = rec !== null;
+    var body = "";
+    if(open){
+      body = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px">'+
+        '<div class="soft" style="padding:9px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">بداية الدوام الإضافي</div>'+
+        '<div style="display:flex;gap:6px"><input type="time" id="r_'+emp.id+'_'+d+'_0" value="'+ (rec.t[0]||"") +'" data-act="settime" data-emp="'+emp.id+'" data-date="'+d+'" data-slot="0" data-type="rest" style="flex:1">'+
+        '<button class="btn btn-sm" data-act="now" data-emp="'+emp.id+'" data-date="'+d+'" data-slot="0" data-type="rest">الآن</button></div></div>'+
+        '<div class="soft" style="padding:9px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">نهاية الدوام الإضافي</div>'+
+        '<div style="display:flex;gap:6px"><input type="time" id="r_'+emp.id+'_'+d+'_3" value="'+ (rec.t[3]||"") +'" data-act="settime" data-emp="'+emp.id+'" data-date="'+d+'" data-slot="3" data-type="rest" style="flex:1">'+
+        '<button class="btn btn-sm" data-act="now" data-emp="'+emp.id+'" data-date="'+d+'" data-slot="3" data-type="rest">الآن</button></div></div>'+
+        '</div>'+
+        '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">'+
+        (r.complete ? '<span class="pill pill-ot">إضافي <span class="num">'+ fmtH(r.ot) +'</span></span>' : '<span class="pill pill-rest">أكمل وقت النهاية</span>')+
+        '<button class="btn btn-sm btn-danger" data-act="del-rest" data-emp="'+emp.id+'" data-date="'+d+'">إلغاء التسجيل</button></div>';
+    }
+    return '<article class="card" style="padding:12px 14px;margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">'+
+        '<div><div style="font-weight:600">'+ esc(emp.name) +'</div>'+
+        '<div style="font-size:12px;color:var(--muted)">'+ esc(emp.dept||"—") +' · استراحة</div></div>'+
+        (open ? "" : '<button class="btn btn-sm" data-act="add-rest" data-emp="'+emp.id+'" data-date="'+d+'">تسجيل دوام في يوم استراحة</button>')+
+      '</div>'+ body +'</article>';
+  }
+
+  /* ---------- الموظفون ---------- */
+  function viewStaff(){
+    var ed = ui.editing;
+    var h = demoBanner();
+    h += '<section class="card" style="padding:16px;margin-bottom:16px">'+
+      '<h2 style="font-size:15px;margin:0 0 12px">'+ (ed ? "تعديل بيانات موظف" : "إضافة موظف") +'</h2>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">'+
+        '<div><label class="label" for="f_name">اسم الموظف</label><input id="f_name" value="'+ esc(ed?ed.name:"") +'" placeholder="الاسم الثلاثي"></div>'+
+        '<div><label class="label" for="f_dept">القسم / الشعبة</label><input id="f_dept" value="'+ esc(ed?ed.dept:"") +'" placeholder="مثال: شعبة الصيانة"></div>'+
+        '<div><label class="label" for="f_start">تاريخ أول يوم دوام</label><input id="f_start" type="date" value="'+ esc(ed?ed.startDate:todayStr()) +'"></div>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">'+
+        '<button class="btn btn-primary" data-act="save-emp">'+ (ed?"حفظ التعديل":"إضافة الموظف") +'</button>'+
+        (ed ? '<button class="btn" data-act="cancel-edit">إلغاء</button>' : '')+
+      '</div>'+
+      '<p style="font-size:12px;color:var(--muted);margin:10px 0 0">من تاريخ أول يوم دوام يبني البرنامج الدورية تلقائياً: يوم دوام ٢٤ ساعة يتبعه ٣ أيام استراحة.</p>'+
+      '</section>';
+
+    if(!state.employees.length) return h + emptyState("القائمة فارغة", "أضف موظفاً لتبدأ الجدولة.");
+
+    h += '<section class="card" style="padding:0;overflow:hidden"><div class="scroll-x"><table><thead><tr>'+
+      '<th>الموظف</th><th>القسم</th><th>أول يوم دوام</th><th>حالة اليوم</th><th>الدوام القادم</th><th class="no-print">إجراءات</th>'+
+      '</tr></thead><tbody>';
+    state.employees.forEach(function(e){
+      var duty = isDutyDay(e, ui.day);
+      var next = ui.day;
+      for(var i=0;i<4;i++){ if(isDutyDay(e, next)) break; next = addDays(next,1); }
+      var del = ui.confirmDel === e.id
+        ? '<button class="btn btn-sm btn-danger" data-act="del-emp-yes" data-id="'+e.id+'">تأكيد الحذف</button> <button class="btn btn-sm" data-act="del-emp-no">تراجع</button>'
+        : '<button class="btn btn-sm" data-act="edit-emp" data-id="'+e.id+'">تعديل</button> <button class="btn btn-sm btn-danger" data-act="del-emp" data-id="'+e.id+'">حذف</button>';
+      h += '<tr><td style="text-align:right;font-weight:600">'+ esc(e.name) +'</td>'+
+        '<td>'+ esc(e.dept||"—") +'</td>'+
+        '<td><span class="num">'+ esc(e.startDate) +'</span></td>'+
+        '<td>'+ (duty ? '<span class="pill pill-duty">دوام</span>' : '<span class="pill pill-rest">استراحة</span>') +'</td>'+
+        '<td><span class="num">'+ esc(next) +'</span> · '+ dayName(next) +'</td>'+
+        '<td class="no-print" style="white-space:nowrap">'+ del +'</td></tr>';
+    });
+    h += '</tbody></table></div></section>';
+    return h;
+  }
+
+  /* ---------- الجدول الشهري ---------- */
+  function viewCalendar(){
+    var ym = ui.calMonth;
+    var y = Number(ym.split("-")[0]), m = Number(ym.split("-")[1]) - 1;
+    var h = demoBanner();
+    h += '<section class="card no-print" style="padding:14px;margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;justify-content:space-between">'+
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">'+
+        '<div><label class="label" for="cal_emp">العرض</label>'+ empSelect("cal_emp", ui.calEmp, true) +'</div>'+
+        '<div><label class="label" for="cal_month">الشهر</label><input id="cal_month" type="month" value="'+ ym +'" data-act="cal-month"></div>'+
+      '</div>'+
+      '<div style="display:flex;gap:12px;font-size:12px;color:var(--muted);flex-wrap:wrap;align-items:center">'+
+        '<span style="display:flex;gap:5px;align-items:center"><span class="dot" style="background:var(--accent)"></span> يوم دوام</span>'+
+        '<span style="display:flex;gap:5px;align-items:center"><span class="dot" style="background:var(--warn)"></span> دوام في استراحة</span>'+
+        '<span style="display:flex;gap:5px;align-items:center"><span class="dot" style="background:var(--line)"></span> استراحة</span>'+
+      '</div></section>';
+
+    if(!state.employees.length) return h + emptyState("لا توجد جدولة", "أضف موظفاً أولاً.");
+
+    h += '<h2 style="font-size:16px;margin:0 0 12px">'+ MONTHS_AR[m] +' <span class="num">'+ y +'</span></h2>';
+    if(ui.calEmp === "all") h += matrixTable(y, m);
+    else h += monthGrid(getEmp(ui.calEmp), y, m);
+    return h;
+  }
+
+  function empSelect(id, val, withAll){
+    var o = withAll ? '<option value="all"'+ (val==="all"?" selected":"") +'>كل الموظفين</option>' : '<option value="">— اختر موظفاً —</option>';
+    state.employees.forEach(function(e){
+      o += '<option value="'+ e.id +'"'+ (val===e.id?" selected":"") +'>'+ esc(e.name) +'</option>';
+    });
+    return '<select id="'+ id +'" data-act="'+ id +'">'+ o +'</select>';
+  }
+
+  function monthGrid(emp, y, m){
+    if(!emp) return emptyState("اختر موظفاً", "لعرض تقويمه الشهري.");
+    var last = new Date(y, m+1, 0).getDate();
+    var first = new Date(y, m, 1).getDay();
+    var cells = "";
+    for(var i=0;i<first;i++) cells += '<div></div>';
+    var dutyCount = 0, otMins = 0;
+    for(var d=1; d<=last; d++){
+      var ds = key(new Date(y,m,d,12));
+      var duty = isDutyDay(emp, ds);
+      var rec = getRec(emp.id, ds);
+      var cls = "cal-cell";
+      if(duty){ cls += " cal-duty"; dutyCount++; }
+      if(!duty && rec) cls += " cal-otday";
+      if(ds === todayStr()) cls += " cal-today";
+      var info = "";
+      if(duty && rec){
+        var s = dutyStats(rec);
+        var n = rec.t.filter(Boolean).length;
+        info = '<div style="font-size:11px;color:var(--muted)">'+ n +'/٤ بصمات</div>';
+        if(s.ot>0){ info += '<div style="font-size:11px;color:var(--warn);font-weight:600" class="num">+'+ fmtH(s.ot) +'</div>'; otMins += s.ot; }
+      } else if(!duty && rec){
+        var r = restStats(rec);
+        info = '<div style="font-size:11px;color:var(--warn);font-weight:600" class="num">+'+ fmtH(r.ot) +'</div>';
+        otMins += r.ot;
+      }
+      cells += '<div class="'+ cls +'"><div style="display:flex;justify-content:space-between;align-items:center">'+
+        '<span class="num" style="font-weight:700">'+ d +'</span>'+
+        '<span style="font-size:10px;color:var(--muted)">'+ (duty?"دوام":"استراحة") +'</span></div>'+ info +'</div>';
+    }
+    var head = DAYS_AR.map(function(n){ return '<div style="text-align:center;font-size:12px;color:var(--muted);font-weight:600;padding-bottom:4px">'+ n +'</div>'; }).join("");
+    return '<section class="card" style="padding:14px">'+
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">'+
+        '<span class="pill pill-duty">أيام الدوام: <span class="num">'+ dutyCount +'</span></span>'+
+        '<span class="pill pill-ot">إضافي الشهر: <span class="num">'+ fmtH(otMins) +'</span></span>'+
+      '</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">'+ head + cells +'</div></section>';
+  }
+
+  function matrixTable(y, m){
+    var last = new Date(y, m+1, 0).getDate();
+    var head = '<th style="position:sticky;right:0;background:var(--surface-2);text-align:right;min-width:120px">الموظف</th>';
+    for(var d=1; d<=last; d++){
+      var ds = key(new Date(y,m,d,12));
+      head += '<th style="min-width:34px;padding:6px 2px"><div class="num">'+ d +'</div><div style="font-size:10px;font-weight:400">'+ dayName(ds).slice(0,3) +'</div></th>';
+    }
+    var body = "";
+    state.employees.forEach(function(e){
+      var row = '<td style="position:sticky;right:0;background:var(--surface);text-align:right;font-weight:600;white-space:nowrap">'+ esc(e.name) +'</td>';
+      for(var d=1; d<=last; d++){
+        var ds = key(new Date(y,m,d,12));
+        var duty = isDutyDay(e, ds);
+        var rec = getRec(e.id, ds);
+        var bg = "transparent", txt = "·", col = "var(--muted)";
+        if(duty){ bg = "var(--accent-soft)"; txt = "د"; col = "var(--accent)"; }
+        if(!duty && rec){ bg = "var(--warn-soft)"; txt = "إ"; col = "var(--warn)"; }
+        if(duty && rec && dutyStats(rec).ot > 0){ bg = "var(--warn-soft)"; txt = "د+"; col = "var(--warn)"; }
+        row += '<td style="padding:4px 2px"><div style="background:'+bg+';color:'+col+';border-radius:6px;font-size:11px;font-weight:700;padding:5px 0">'+ txt +'</div></td>';
+      }
+      body += '<tr>'+ row +'</tr>';
+    });
+    return '<section class="card" style="padding:0;overflow:hidden"><div class="scroll-x"><table><thead><tr>'+ head +'</tr></thead><tbody>'+ body +'</tbody></table></div>'+
+      '<div style="padding:10px 14px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)">د = يوم دوام · د+ = دوام مع ساعات إضافية · إ = دوام في يوم استراحة</div></section>';
+  }
+
+  /* ---------- كشف الساعات ---------- */
+  function viewSheet(){
+    var h = demoBanner();
+    h += '<section class="card no-print" style="padding:14px;margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">'+
+      '<div style="flex:1;min-width:180px"><label class="label" for="sheet_emp">الموظف</label>'+ empSelect("sheet_emp", ui.sheetEmp, false) +'</div>'+
+      '<div style="flex:1;min-width:150px"><label class="label" for="sheet_month">الشهر</label><input id="sheet_month" type="month" value="'+ ui.sheetMonth +'" data-act="sheet-month"></div>'+
+      '<button class="btn btn-primary" data-act="print">طباعة الكشف</button>'+
+      '</section>';
+    if(!ui.sheetEmp || !getEmp(ui.sheetEmp)) return h + emptyState("اختر موظفاً وشهراً", "ليظهر التايم شيت جاهزاً للطباعة.");
+
+    var R = monthReport(ui.sheetEmp, ui.sheetMonth);
+    var y = Number(R.ym.split("-")[0]), m = Number(R.ym.split("-")[1]) - 1;
+
+    var rows = R.rows.map(function(r){
+      var t = r.rec ? r.rec.t : [null,null,null,null];
+      var typeCell = r.duty ? '<span class="pill pill-duty">دوام</span>' : '<span class="pill pill-ot">استراحة</span>';
+      return '<tr><td><span class="num">'+ parseD(r.date).getDate() +'</span></td>'+
+        '<td>'+ dayName(r.date) +'</td>'+
+        '<td>'+ typeCell +'</td>'+
+        '<td class="num">'+ (t[0]||"—") +'</td>'+
+        '<td class="num">'+ (t[1]||"—") +'</td>'+
+        '<td class="num">'+ (t[2]||"—") +'</td>'+
+        '<td class="num">'+ (t[3]||"—") +'</td>'+
+        '<td class="num">'+ (r.base?fmtH(r.base):"—") +'</td>'+
+        '<td class="num" style="color:'+ (r.ot?"var(--warn)":"inherit") +';font-weight:'+ (r.ot?"700":"400") +'">'+ (r.ot?fmtH(r.ot):"—") +'</td>'+
+        '<td style="font-size:12px;color:var(--muted)">'+ esc(r.note) +'</td></tr>';
+    }).join("");
+
+    function tile(l, v, sub, color){
+      return '<div class="soft" style="padding:12px 14px">'+
+        '<div class="label">'+ esc(l) +'</div>'+
+        '<div class="display num" style="font-size:24px;line-height:1.2;color:'+ (color||"var(--ink)") +'">'+ v +'</div>'+
+        '<div style="font-size:11px;color:var(--muted)">'+ esc(sub) +'</div></div>';
+    }
+
+    h += '<section class="paper" style="padding:22px">'+
+      '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;border-bottom:2px solid var(--accent);padding-bottom:12px;margin-bottom:16px">'+
+        '<div><div class="display" style="font-size:20px">كشف الساعات الشهري</div>'+
+        '<div style="font-size:13px;color:var(--muted)">نظام المناوبة: ٢٤ ساعة دوام يليها ٣ أيام استراحة</div></div>'+
+        '<div style="text-align:left;font-size:13px">'+
+          '<div><span style="color:var(--muted)">الشهر:</span> '+ MONTHS_AR[m] +' <span class="num">'+ y +'</span></div>'+
+          '<div><span style="color:var(--muted)">تاريخ الإصدار:</span> <span class="num">'+ todayStr() +'</span></div>'+
+        '</div></div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px">'+
+        '<div class="soft" style="padding:12px 14px"><div class="label">الموظف</div><div style="font-weight:700;font-size:16px">'+ esc(R.emp.name) +'</div><div style="font-size:12px;color:var(--muted)">'+ esc(R.emp.dept||"—") +'</div></div>'+
+        tile("أيام الدوام الفعلي", R.worked, "من "+ R.scheduled +" يوم مجدول") +
+        tile("الساعات الأساسية", fmtH(R.base), "ساعة:دقيقة") +
+        tile("الساعات الإضافية", fmtH(R.ot), R.restWorked ? ("تأخير + "+ R.restWorked +" يوم استراحة") : "تأخير ما بعد ٢٤ ساعة", "var(--warn)") +
+        tile("مجموع الساعات", fmtH(R.total), "أساسي + إضافي") +
+      '</div>'+
+      (R.openShifts ? '<div class="soft" style="padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--warn)">هناك '+ R.openShifts +' وجبة بدون بصمة نهاية — لن تُحتسب ساعاتها حتى تُسجَّل.</div>' : '')+
+      '<div class="scroll-x"><table><thead><tr>'+
+        '<th>التاريخ</th><th>اليوم</th><th>النوع</th><th>صباحية</th><th>وسطية</th><th>ليلية</th><th>صباح التالي</th><th>أساسي</th><th>إضافي</th><th>ملاحظات</th>'+
+      '</tr></thead><tbody>'+ (rows || '<tr><td colspan="10" style="color:var(--muted)">لا توجد أيام مسجلة في هذا الشهر.</td></tr>') +'</tbody>'+
+      '<tfoot><tr style="font-weight:700;background:var(--surface-2)"><td colspan="7" style="text-align:left">المجموع</td>'+
+        '<td class="num">'+ fmtH(R.base) +'</td><td class="num" style="color:var(--warn)">'+ fmtH(R.ot) +'</td><td class="num">'+ fmtH(R.total) +'</td></tr></tfoot>'+
+      '</table></div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:24px;margin-top:36px">'+
+        '<div class="sig-line">توقيع الموظف</div><div class="sig-line">مسؤول الشعبة</div><div class="sig-line">المدير الإداري</div>'+
+      '</div></section>'+
+      '<p class="no-print" style="font-size:12px;color:var(--muted);margin-top:10px">إذا لم تُفتح نافذة الطباعة داخل هذه المعاينة، افتح الملف المحفوظ في متصفحك ثم اطبع أو احفظ بصيغة PDF.</p>';
+    return h;
+  }
+
+  /* ============ الأحداث ============ */
+  document.getElementById("tabs").addEventListener("click", function(ev){
+    var b = ev.target.closest("[data-tab]"); if(!b) return;
+    ui.tab = b.dataset.tab; ui.confirmDel = null; render();
+  });
+
+  document.addEventListener("click", function(ev){
+    var el = ev.target.closest("[data-act]"); if(!el) return;
+    var a = el.dataset.act;
+
+    if(a === "day"){
+      var v = Number(el.dataset.v);
+      ui.day = v === 0 ? todayStr() : addDays(ui.day, v);
+      render(); return;
+    }
+    if(a === "now"){
+      var type = el.dataset.type;
+      var rec = ensureRec(el.dataset.emp, el.dataset.date, type);
+      rec.t[Number(el.dataset.slot)] = nowHM();
+      state.demo = false; save(); render(); return;
+    }
+    if(a === "add-rest"){ ensureRec(el.dataset.emp, el.dataset.date, "rest"); save(); render(); return; }
+    if(a === "del-rest"){ delete state.records[rkey(el.dataset.emp, el.dataset.date)]; save(); render(); return; }
+
+    if(a === "save-emp"){
+      var name = (document.getElementById("f_name").value||"").trim();
+      var dept = (document.getElementById("f_dept").value||"").trim();
+      var start = document.getElementById("f_start").value;
+      if(!name || !start){ flash("أدخل اسم الموظف وتاريخ أول يوم دوام."); return; }
+      if(ui.editing){
+        var e = getEmp(ui.editing.id);
+        e.name = name; e.dept = dept; e.startDate = start; ui.editing = null;
+      } else {
+        state.employees.push({ id:"e"+Date.now().toString(36), name:name, dept:dept, startDate:start });
+      }
+      state.demo = false; save(); render(); return;
+    }
+    if(a === "edit-emp"){ var emp = getEmp(el.dataset.id); ui.editing = { id:emp.id, name:emp.name, dept:emp.dept, startDate:emp.startDate }; render(); window.scrollTo({top:0,behavior:"smooth"}); return; }
+    if(a === "cancel-edit"){ ui.editing = null; render(); return; }
+    if(a === "del-emp"){ ui.confirmDel = el.dataset.id; render(); return; }
+    if(a === "del-emp-no"){ ui.confirmDel = null; render(); return; }
+    if(a === "del-emp-yes"){
+      var id = el.dataset.id;
+      state.employees = state.employees.filter(function(e){ return e.id !== id; });
+      Object.keys(state.records).forEach(function(k){ if(k.indexOf(id+"|") === 0) delete state.records[k]; });
+      if(ui.sheetEmp === id) ui.sheetEmp = "";
+      if(ui.calEmp === id) ui.calEmp = "all";
+      ui.confirmDel = null; save(); render(); return;
+    }
+    if(a === "clear-demo"){ state = { employees:[], records:{}, demo:false }; ui.sheetEmp=""; ui.calEmp="all"; save(); render(); return; }
+    if(a === "print"){ window.print(); return; }
+
+    if(a === "backup"){
+      var data = JSON.stringify({ employees:state.employees, records:state.records }, null, 2);
+      copyText(data, el); return;
+    }
+    if(a === "restore-open"){ openRestore(); return; }
+    if(a === "modal-close"){ closeModal(); return; }
+    if(a === "restore-apply"){
+      var txt = document.getElementById("restore_txt").value;
+      try{
+        var d = JSON.parse(txt);
+        if(!d || !Array.isArray(d.employees)) throw new Error("bad");
+        state.employees = d.employees; state.records = d.records || {}; state.demo = false;
+        save(); closeModal(); render(); flash("تمت استعادة البيانات.");
+      }catch(e){ document.getElementById("restore_err").textContent = "النص غير صالح — الصق نسخة احتياطية كاملة بصيغة JSON."; }
+      return;
+    }
+  });
+
+  document.addEventListener("change", function(ev){
+    var el = ev.target.closest("[data-act]"); if(!el) return;
+    var a = el.dataset.act;
+    if(a === "settime"){
+      var rec = ensureRec(el.dataset.emp, el.dataset.date, el.dataset.type);
+      rec.t[Number(el.dataset.slot)] = el.value || null;
+      dropIfEmpty(el.dataset.emp, el.dataset.date);
+      state.demo = false; save(); render(); return;
+    }
+    if(a === "cal_emp"){ ui.calEmp = el.value; render(); return; }
+    if(a === "cal-month"){ ui.calMonth = el.value || ui.calMonth; render(); return; }
+    if(a === "sheet_emp"){ ui.sheetEmp = el.value; render(); return; }
+    if(a === "sheet-month"){ ui.sheetMonth = el.value || ui.sheetMonth; render(); return; }
+  });
+
+  function copyText(txt, btn){
+    var done = function(){ var o = btn.textContent; btn.textContent = "تم النسخ ✓"; setTimeout(function(){ btn.textContent = o; }, 1800); };
+    try{
+      navigator.clipboard.writeText(txt).then(done).catch(function(){ showText(txt); });
+    }catch(e){ showText(txt); }
+  }
+  function showText(txt){
+    openModal('<h2 style="font-size:16px;margin:0 0 8px">النسخة الاحتياطية</h2>'+
+      '<p style="font-size:13px;color:var(--muted);margin:0 0 10px">انسخ النص التالي واحفظه في ملف.</p>'+
+      '<textarea rows="10" readonly>'+ esc(txt) +'</textarea>'+
+      '<div style="display:flex;justify-content:flex-start;margin-top:12px"><button class="btn" data-act="modal-close">إغلاق</button></div>');
+  }
+  function openRestore(){
+    openModal('<h2 style="font-size:16px;margin:0 0 8px">استعادة نسخة احتياطية</h2>'+
+      '<p style="font-size:13px;color:var(--muted);margin:0 0 10px">الصق نص النسخة الاحتياطية هنا. سيحل محل البيانات الحالية.</p>'+
+      '<textarea id="restore_txt" rows="9" placeholder="{ &quot;employees&quot;: [ ... ] }"></textarea>'+
+      '<div id="restore_err" style="color:var(--danger);font-size:12px;margin-top:6px"></div>'+
+      '<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" data-act="restore-apply">استعادة</button>'+
+      '<button class="btn" data-act="modal-close">إلغاء</button></div>');
+  }
+  function openModal(html){
+    var m = document.getElementById("modal");
+    document.getElementById("modal-body").innerHTML = html;
+    m.hidden = false;
+  }
+  function closeModal(){ document.getElementById("modal").hidden = true; }
+  document.getElementById("modal").addEventListener("click", function(ev){ if(ev.target.id === "modal") closeModal(); });
+
+  function flash(msg){
+    var d = document.createElement("div");
+    d.className = "card no-print";
+    d.textContent = msg;
+    d.style.cssText = "position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));right:16px;left:16px;max-width:380px;margin-inline:auto;padding:12px 16px;z-index:70;text-align:center;font-size:14px";
+    document.body.appendChild(d);
+    setTimeout(function(){ d.remove(); }, 2600);
+  }
+
+  /* ============ الإقلاع ============ */
+  if(!load()) seedDemo();
+  if(!state.employees.length) ui.tab = "staff";
+  if(state.employees.length) ui.sheetEmp = state.employees[0].id;
+  render();
+})();
+</script>
+
+<script>
+(function(){
+  "use strict";
+  /* ===== تسجيل عامل الخدمة (العمل بدون إنترنت) ===== */
+  if("serviceWorker" in navigator){
+    window.addEventListener("load", function(){
+      navigator.serviceWorker.register("sw.js").then(function(reg){
+        reg.addEventListener("updatefound", function(){
+          var nw = reg.installing;
+          if(!nw) return;
+          nw.addEventListener("statechange", function(){
+            if(nw.state === "installed" && navigator.serviceWorker.controller) toast("وصل تحديث للتطبيق — أعد فتحه لتطبيقه.");
+          });
+        });
+      }).catch(function(){});
+    });
+  }
+
+  /* ===== زر التثبيت (أندرويد / ويندوز / كروم) ===== */
+  var deferred = null;
+  var btn = document.getElementById("installBtn");
+  window.addEventListener("beforeinstallprompt", function(e){
+    e.preventDefault(); deferred = e; if(btn) btn.hidden = false;
+  });
+  if(btn) btn.addEventListener("click", function(){
+    if(!deferred) return;
+    deferred.prompt();
+    deferred.userChoice.then(function(){ deferred = null; btn.hidden = true; });
+  });
+  window.addEventListener("appinstalled", function(){ if(btn) btn.hidden = true; toast("تم تثبيت التطبيق على جهازك."); });
+
+  /* ===== تلميح التثبيت على iOS ===== */
+  var standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  var hint = document.getElementById("iosHint");
+  var hidden = false;
+  try{ hidden = localStorage.getItem("ios_hint_off") === "1"; }catch(e){}
+  if(isIOS && !standalone && !hidden && hint) hint.hidden = false;
+  var hc = document.getElementById("iosHintClose");
+  if(hc) hc.addEventListener("click", function(){
+    if(hint) hint.hidden = true;
+    try{ localStorage.setItem("ios_hint_off","1"); }catch(e){}
+  });
+
+  /* ===== مؤشر الاتصال ===== */
+  var pill = document.getElementById("netPill");
+  function net(){ if(pill) pill.hidden = navigator.onLine; }
+  window.addEventListener("online", net); window.addEventListener("offline", net); net();
+
+  /* ===== اختصارات التطبيق (#today, #staff, #calendar, #sheet) ===== */
+  function openFromHash(){
+    var t = (location.hash || "").replace("#","");
+    if(!t) return;
+    var b = document.querySelector('#tabs [data-tab="'+ t +'"]');
+    if(b) b.click();
+  }
+  openFromHash();
+  window.addEventListener("hashchange", openFromHash);
+
+  function toast(msg){
+    var d = document.createElement("div");
+    d.className = "card no-print"; d.textContent = msg;
+    d.style.cssText = "position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));right:16px;left:16px;max-width:380px;margin-inline:auto;padding:12px 16px;z-index:70;text-align:center;font-size:14px";
+    document.body.appendChild(d); setTimeout(function(){ d.remove(); }, 3200);
+  }
+})();
+</script>
+
+</body>
+</html>
