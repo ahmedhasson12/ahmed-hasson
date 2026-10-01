@@ -334,9 +334,31 @@
       }
       ds = addDays(ds, 1);
     }
+
+    // توزيع الساعات الإضافية على أسابيع الشهر (١-٧، ٨-١٤، ١٥-٢١، ٢٢-٢٨، وبقية الشهر)
+    var WEEK_NAMES = ["الأسبوع الأول","الأسبوع الثاني","الأسبوع الثالث","الأسبوع الرابع"];
+    var bounds = [[1,7],[8,14],[15,21],[22,28],[29,31]];
+    var weeks = [];
+    for(var w=0; w<bounds.length; w++){
+      var a = bounds[w][0];
+      if(a > lastD) continue;
+      var b = Math.min(bounds[w][1], lastD);
+      var wOt = 0, wDays = 0;
+      for(var dd=a; dd<=b; dd++){
+        var wds = key(new Date(y, m, dd, 12));
+        wOt += otOnDate(empId, wds);
+        if(isDutyDay(emp, wds)){
+          var wr = getRec(empId, wds);
+          if(wr && dutyStats(wr).started) wDays++;
+        }
+      }
+      weeks.push({ label: w < 4 ? WEEK_NAMES[w] : "بقية الشهر",
+                   from:a, to:b, ot:wOt, days:wDays });
+    }
+
     return { emp:emp, ym:ym, rows:rows, scheduled:scheduled, worked:worked, restWorked:restWorked,
              base:base, ot:ot, total:base+ot, openShifts:openShifts,
-             carryIn:carryIn, carryOut:carryOut };
+             carryIn:carryIn, carryOut:carryOut, weeks:weeks };
   }
 
   /* ============ بيانات تجريبية ============ */
@@ -690,6 +712,22 @@
              R.carryIn ? ("يشمل "+ fmtH(R.carryIn) +" مُرحّلة من الشهر السابق")
              : (R.restWorked ? ("تأخير + "+ R.restWorked +" يوم استراحة") : "تأخير ما بعد ٢٤ ساعة"), "var(--warn)") +
         tile("مجموع الساعات", fmtH(R.total), "أساسي + إضافي") +
+      '</div>'+
+      '<div style="margin-bottom:16px">'+
+        '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">'+
+          '<h3 style="font-size:14px;margin:0">الساعات الإضافية حسب أسابيع الشهر</h3>'+
+          '<span style="font-size:12px;color:var(--muted)">المجموع <span class="num">'+ fmtH(R.ot) +'</span></span>'+
+        '</div>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px">'+
+          R.weeks.map(function(w){
+            var strong = w.ot > 0;
+            return '<div class="soft" style="padding:10px 12px'+ (strong ? ';border-color:var(--warn)' : '') +'">'+
+              '<div class="label">'+ esc(w.label) +'</div>'+
+              '<div class="display num" style="font-size:20px;line-height:1.25;color:'+ (strong ? "var(--warn)" : "var(--muted)") +'">'+ fmtH(w.ot) +'</div>'+
+              '<div style="font-size:11px;color:var(--muted)">الأيام <span class="num">'+ w.from +'–'+ w.to +'</span> · <span class="num">'+ w.days +'</span> يوم دوام</div>'+
+            '</div>';
+          }).join("") +
+        '</div>'+
       '</div>'+
       (R.openShifts ? '<div class="soft" style="padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--warn)">هناك '+ R.openShifts +' وجبة بدون بصمة نهاية — لن تُحتسب ساعاتها حتى تُسجَّل.</div>' : '')+
       '<div class="scroll-x"><table><thead><tr>'+
