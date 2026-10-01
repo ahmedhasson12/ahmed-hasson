@@ -138,6 +138,10 @@
   th,td{padding:9px 10px;text-align:center;border-bottom:1px solid var(--line)}
   th{font-size:12px;color:var(--muted);font-weight:600;background:var(--surface-2)}
   tbody tr:last-child td{border-bottom:none}
+  .tnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;direction:ltr}
+  .sheet-table{table-layout:fixed;min-width:900px}
+  .sheet-table td,.sheet-table th{overflow-wrap:break-word;padding-inline:4px}
+  .sheet-table th{font-size:11px}
   .scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .cal-cell{border:1px solid var(--line);border-radius:10px;min-height:62px;padding:6px;display:flex;flex-direction:column;gap:4px;background:var(--surface)}
   .cal-duty{background:var(--accent-soft);border-color:var(--accent)}
@@ -146,15 +150,22 @@
   .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
   .sig-line{border-top:1px dashed var(--muted);padding-top:6px;font-size:12px;color:var(--muted);text-align:center}
   .paper{background:var(--surface);border:1px solid var(--line);border-radius:14px}
+  @page{ margin:14mm 10mm; }
   @media print{
     body::before{display:none}
-    body{background:#fff;color:#000;font-size:12px}
+    body{background:#fff;color:#000;font-size:11px}
     .no-print{display:none!important}
-    .paper{border:none;box-shadow:none;border-radius:0}
+    .paper{border:none;box-shadow:none;border-radius:0;padding:0!important}
     .wrap{padding:0;max-width:none}
+    .scroll-x{overflow:visible!important}
+    table{font-size:10px;width:100%}
+    .sheet-table{min-width:0;width:100%}
+    th,td{border-bottom:1px solid #999;padding:4px 3px}
     th{background:#f0f0f0!important;color:#000!important}
-    th,td{border-bottom:1px solid #999}
-    .pill{border:1px solid #666;color:#000!important;background:#fff!important}
+    thead{display:table-header-group}
+    tr{break-inside:avoid}
+    .pill{border:1px solid #666;color:#000!important;background:#fff!important;padding:1px 6px}
+    .soft{break-inside:avoid}
   }
 </style>
 
@@ -701,12 +712,12 @@
         '<td>'+ dayName(r.date) +'</td>'+
         '<td>'+ typeCell +'</td>'+
 
-        '<td class="num">'+ (t[0]||"—") +'</td>'+
-        '<td class="num">'+ (t[1]||"—") +'</td>'+
-        '<td class="num">'+ (t[2]||"—") +'</td>'+
-        '<td class="num">'+ (t[3]||"—") +'</td>'+
-        '<td class="num">'+ (r.base?fmtH(r.base):"—") +'</td>'+
-        '<td class="num" style="color:'+ (r.ot?"var(--warn)":"inherit") +';font-weight:'+ (r.ot?"700":"400") +'">'+ (r.ot?fmtH(r.ot):"—") +'</td>'+
+        '<td class="tnum">'+ (t[0]||"—") +'</td>'+
+        '<td class="tnum">'+ (t[1]||"—") +'</td>'+
+        '<td class="tnum">'+ (t[2]||"—") +'</td>'+
+        '<td class="tnum">'+ (t[3]||"—") +'</td>'+
+        '<td class="tnum">'+ (r.base?fmtH(r.base):"—") +'</td>'+
+        '<td class="tnum" style="color:'+ (r.ot?"var(--warn)":"inherit") +';font-weight:'+ (r.ot?"700":"400") +'">'+ (r.ot?fmtH(r.ot):"—") +'</td>'+
         '<td style="font-size:12px;color:var(--muted)">'+ esc(r.note) +'</td></tr>';
     }).join("");
 
@@ -720,7 +731,7 @@
     h += '<section class="paper" style="padding:22px">'+
       '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;border-bottom:2px solid var(--accent);padding-bottom:12px;margin-bottom:16px">'+
         '<div><div class="display" style="font-size:20px">كشف الساعات الشهري</div>'+
-        '<div style="font-size:13px;color:var(--muted)">نظام المناوبة: ٢٤ ساعة دوام يليها ٣ أيام استراحة</div></div>'+
+        '</div>'+
         '<div style="text-align:left;font-size:13px">'+
           '<div><span style="color:var(--muted)">الشهر:</span> '+ MONTHS_AR[m] +' <span class="num">'+ y +'</span></div>'+
           '<div><span style="color:var(--muted)">تاريخ الإصدار:</span> <span class="num">'+ todayStr() +'</span></div>'+
@@ -751,17 +762,16 @@
         '</div>'+
       '</div>'+
       (R.openShifts ? '<div class="soft" style="padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--warn)">هناك '+ R.openShifts +' وجبة بدون بصمة نهاية — لن تُحتسب ساعاتها حتى تُسجَّل.</div>' : '')+
-      '<div class="scroll-x"><table><thead><tr>'+
+      '<div class="scroll-x"><table class="sheet-table">'+
+      '<colgroup><col style="width:8%"><col style="width:9%"><col style="width:9%">'+
+      '<col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:10%">'+
+      '<col style="width:8%"><col style="width:8%"><col style="width:21%"></colgroup>'+
+      '<thead><tr>'+
         '<th>التاريخ</th><th>اليوم</th><th>النوع</th><th>صباحية</th><th>وسطية</th><th>ليلية</th><th>صباح التالي</th><th>أساسي</th><th>إضافي</th><th>ملاحظات</th>'+
       '</tr></thead><tbody>'+ (rows || '<tr><td colspan="10" style="color:var(--muted)">لا توجد أيام مسجلة في هذا الشهر.</td></tr>') +'</tbody>'+
       '<tfoot><tr style="font-weight:700;background:var(--surface-2)"><td colspan="7" style="text-align:left">المجموع</td>'+
-        '<td class="num">'+ fmtH(R.base) +'</td><td class="num" style="color:var(--warn)">'+ fmtH(R.ot) +'</td><td class="num">'+ fmtH(R.total) +'</td></tr></tfoot>'+
+        '<td class="tnum">'+ fmtH(R.base) +'</td><td class="tnum" style="color:var(--warn)">'+ fmtH(R.ot) +'</td><td class="tnum">'+ fmtH(R.total) +'</td></tr></tfoot>'+
       '</table></div>'+
-      '<div style="font-size:12px;color:var(--muted);margin-top:10px;line-height:1.8">'+
-        'قاعدة الاحتساب: يوم الدوام وساعاته الأساسية تُنسب إلى تاريخ بداية الوجبة، أما الساعات الإضافية الناتجة عن تأخّر الخروج فتُنسب إلى اليوم التالي لأنها أُديت فيه فعلاً.'+
-        (R.carryIn ? '<br>الصف المظلّل في الأعلى: وجبة بدأت في الشهر السابق ووقع إضافيها (<span class="num">'+ fmtH(R.carryIn) +'</span>) في هذا الشهر.' : '')+
-        (R.carryOut ? '<br>الصف المظلّل في الأسفل: وجبة بدأت في آخر هذا الشهر وإضافيها (<span class="num">'+ fmtH(R.carryOut) +'</span>) سيظهر في كشف الشهر التالي.' : '')+
-      '</div>'+
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:24px;margin-top:36px">'+
         '<div class="sig-line">توقيع الموظف</div><div class="sig-line">مسؤول الشعبة</div><div class="sig-line">المدير الإداري</div>'+
       '</div></section>'+

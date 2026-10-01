@@ -1,7 +1,7 @@
 /* سجل المناوبات — عامل الخدمة (Service Worker)
    يخزّن ملفات التطبيق ليعمل كاملاً بدون إنترنت. */
 
-const VERSION = "shift-attendance-v4";
+const VERSION = "shift-attendance-v5";
 const CORE = [
   "./",
   "./index.html",
