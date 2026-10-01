@@ -264,39 +264,79 @@
 
   function getEmp(id){ for(var i=0;i<state.employees.length;i++){ if(state.employees[i].id===id) return state.employees[i]; } return null; }
 
+  // الساعات الإضافية المحتسبة على تاريخ تقويمي معيّن:
+  // تأخير الخروج يقع فجر/نهار اليوم التالي لبداية الوجبة، فيُحسب على ذلك اليوم.
+  function otOnDate(empId, ds){
+    var emp = getEmp(empId), total = 0;
+    if(!emp) return 0;
+    if(!isDutyDay(emp, ds)){
+      var r = getRec(empId, ds);
+      if(r) total += restStats(r).ot;
+    }
+    var prev = addDays(ds, -1);
+    if(isDutyDay(emp, prev)){
+      var rec = getRec(empId, prev);
+      if(rec) total += dutyStats(rec).ot;
+    }
+    return total;
+  }
+
   function monthReport(empId, ym){
     var emp = getEmp(empId);
     var y = Number(ym.split("-")[0]), m = Number(ym.split("-")[1]) - 1;
-    var last = new Date(y, m+1, 0).getDate();
-    var rows = [], scheduled = 0, worked = 0, restWorked = 0, base = 0, ot = 0, openShifts = 0;
-    for(var d=1; d<=last; d++){
-      var ds = key(new Date(y, m, d, 12));
+    var lastD = new Date(y, m+1, 0).getDate();
+    var firstDate = key(new Date(y, m, 1, 12));
+    var lastDate = key(new Date(y, m, lastD, 12));
+    function inMonth(ds){ return ds >= firstDate && ds <= lastDate; }
+
+    var rows = [], scheduled = 0, worked = 0, restWorked = 0;
+    var base = 0, ot = 0, openShifts = 0, carryIn = 0, carryOut = 0;
+
+    // نبدأ المسح من اليوم السابق للشهر: وجبة بدأت أواخر الشهر الماضي قد يقع إضافيها هنا
+    var ds = addDays(firstDate, -1);
+    while(ds <= lastDate){
       var duty = isDutyDay(emp, ds);
       var rec = getRec(empId, ds);
-      if(duty) scheduled++;
-      if(!duty && !rec) continue;
-      var row = { date:ds, duty:duty, rec:rec, base:0, ot:0, note:"" };
-      if(duty){
+      var otDate = addDays(ds, 1);
+
+      if(duty && rec && !inMonth(ds)){
+        // ترحيل وارد من الشهر السابق: الساعات الإضافية فقط
+        var sIn = dutyStats(rec);
+        if(sIn.complete && sIn.ot > 0 && inMonth(otDate)){
+          ot += sIn.ot; carryIn += sIn.ot;
+          rows.push({ date:ds, duty:true, rec:rec, base:0, ot:sIn.ot, carry:"in",
+                      note:"إضافي مُرحّل من وجبة "+ fmtDate(ds) });
+        }
+      } else if(duty && inMonth(ds)){
+        scheduled++;
         var s = dutyStats(rec);
+        var row = { date:ds, duty:true, rec:rec, base:0, ot:0, carry:null, note:"" };
         if(s.started) worked++;
         if(s.complete){
-          row.base = s.base; row.ot = s.ot;
-          base += s.base; ot += s.ot;
-          if(s.ot > 0) row.note = "إضافي بعد ٢٤ ساعة";
+          row.base = s.base; base += s.base;
+          if(s.ot > 0){
+            if(inMonth(otDate)){ row.ot = s.ot; ot += s.ot; row.note = "إضافي بعد ٢٤ ساعة"; }
+            else { row.carry = "out"; carryOut += s.ot;
+                   row.note = "إضافي "+ fmtH(s.ot) +" رُحّل إلى الشهر التالي"; }
+          }
           else if(s.short > 0) row.note = "نقص " + fmtH(s.short);
           else row.note = "مكتملة";
         } else if(s.started){ row.note = "وجبة غير مكتملة"; openShifts++; }
         else row.note = rec ? "بصمات ناقصة" : "بدون بصمات";
-      } else {
+        rows.push(row);
+      } else if(!duty && rec && inMonth(ds)){
         var r = restStats(rec);
+        var rw = { date:ds, duty:false, rec:rec, base:0, ot:0, carry:null, note:"" };
         if(r.started) restWorked++;
-        if(r.complete){ row.ot = r.ot; ot += r.ot; row.note = "دوام في يوم استراحة"; }
-        else row.note = "تسجيل غير مكتمل";
+        if(r.complete){ rw.ot = r.ot; ot += r.ot; rw.note = "دوام في يوم استراحة"; }
+        else rw.note = "تسجيل غير مكتمل";
+        rows.push(rw);
       }
-      rows.push(row);
+      ds = addDays(ds, 1);
     }
     return { emp:emp, ym:ym, rows:rows, scheduled:scheduled, worked:worked, restWorked:restWorked,
-             base:base, ot:ot, total:base+ot, openShifts:openShifts };
+             base:base, ot:ot, total:base+ot, openShifts:openShifts,
+             carryIn:carryIn, carryOut:carryOut };
   }
 
   /* ============ بيانات تجريبية ============ */
@@ -541,20 +581,19 @@
       var ds = key(new Date(y,m,d,12));
       var duty = isDutyDay(emp, ds);
       var rec = getRec(emp.id, ds);
+      var dayOt = otOnDate(emp.id, ds);
       var cls = "cal-cell";
       if(duty){ cls += " cal-duty"; dutyCount++; }
-      if(!duty && rec) cls += " cal-otday";
+      if(!duty && (rec || dayOt > 0)) cls += " cal-otday";
       if(ds === todayStr()) cls += " cal-today";
       var info = "";
       if(duty && rec){
-        var s = dutyStats(rec);
         var n = rec.t.filter(Boolean).length;
         info = '<div style="font-size:11px;color:var(--muted)">'+ n +'/٤ بصمات</div>';
-        if(s.ot>0){ info += '<div style="font-size:11px;color:var(--warn);font-weight:600" class="num">+'+ fmtH(s.ot) +'</div>'; otMins += s.ot; }
-      } else if(!duty && rec){
-        var r = restStats(rec);
-        info = '<div style="font-size:11px;color:var(--warn);font-weight:600" class="num">+'+ fmtH(r.ot) +'</div>';
-        otMins += r.ot;
+      }
+      if(dayOt > 0){
+        info += '<div style="font-size:11px;color:var(--warn);font-weight:600" class="num">+'+ fmtH(dayOt) +'</div>';
+        otMins += dayOt;
       }
       cells += '<div class="'+ cls +'"><div style="display:flex;justify-content:space-between;align-items:center">'+
         '<span class="num" style="font-weight:700">'+ d +'</span>'+
@@ -610,10 +649,15 @@
 
     var rows = R.rows.map(function(r){
       var t = r.rec ? r.rec.t : [null,null,null,null];
-      var typeCell = r.duty ? '<span class="pill pill-duty">دوام</span>' : '<span class="pill pill-ot">استراحة</span>';
-      return '<tr><td><span class="num">'+ parseD(r.date).getDate() +'</span></td>'+
+      var typeCell = r.carry === "in" ? '<span class="pill pill-ot">ترحيل</span>'
+                   : (r.duty ? '<span class="pill pill-duty">دوام</span>' : '<span class="pill pill-ot">استراحة</span>');
+      var dateCell = r.carry === "in"
+        ? '<span class="num">'+ parseD(r.date).getDate() +'</span> <span style="font-size:11px;color:var(--muted)">'+ MONTHS_AR[parseD(r.date).getMonth()] +'</span>'
+        : '<span class="num">'+ parseD(r.date).getDate() +'</span>';
+      return '<tr'+ (r.carry ? ' style="background:var(--warn-soft)"' : '') +'><td>'+ dateCell +'</td>'+
         '<td>'+ dayName(r.date) +'</td>'+
         '<td>'+ typeCell +'</td>'+
+
         '<td class="num">'+ (t[0]||"—") +'</td>'+
         '<td class="num">'+ (t[1]||"—") +'</td>'+
         '<td class="num">'+ (t[2]||"—") +'</td>'+
@@ -642,7 +686,9 @@
         '<div class="soft" style="padding:12px 14px"><div class="label">الموظف</div><div style="font-weight:700;font-size:16px">'+ esc(R.emp.name) +'</div><div style="font-size:12px;color:var(--muted)">'+ esc(R.emp.dept||"—") +'</div></div>'+
         tile("أيام الدوام الفعلي", R.worked, "من "+ R.scheduled +" يوم مجدول") +
         tile("الساعات الأساسية", fmtH(R.base), "ساعة:دقيقة") +
-        tile("الساعات الإضافية", fmtH(R.ot), R.restWorked ? ("تأخير + "+ R.restWorked +" يوم استراحة") : "تأخير ما بعد ٢٤ ساعة", "var(--warn)") +
+        tile("الساعات الإضافية", fmtH(R.ot),
+             R.carryIn ? ("يشمل "+ fmtH(R.carryIn) +" مُرحّلة من الشهر السابق")
+             : (R.restWorked ? ("تأخير + "+ R.restWorked +" يوم استراحة") : "تأخير ما بعد ٢٤ ساعة"), "var(--warn)") +
         tile("مجموع الساعات", fmtH(R.total), "أساسي + إضافي") +
       '</div>'+
       (R.openShifts ? '<div class="soft" style="padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--warn)">هناك '+ R.openShifts +' وجبة بدون بصمة نهاية — لن تُحتسب ساعاتها حتى تُسجَّل.</div>' : '')+
@@ -652,6 +698,11 @@
       '<tfoot><tr style="font-weight:700;background:var(--surface-2)"><td colspan="7" style="text-align:left">المجموع</td>'+
         '<td class="num">'+ fmtH(R.base) +'</td><td class="num" style="color:var(--warn)">'+ fmtH(R.ot) +'</td><td class="num">'+ fmtH(R.total) +'</td></tr></tfoot>'+
       '</table></div>'+
+      '<div style="font-size:12px;color:var(--muted);margin-top:10px;line-height:1.8">'+
+        'قاعدة الاحتساب: يوم الدوام وساعاته الأساسية تُنسب إلى تاريخ بداية الوجبة، أما الساعات الإضافية الناتجة عن تأخّر الخروج فتُنسب إلى اليوم التالي لأنها أُديت فيه فعلاً.'+
+        (R.carryIn ? '<br>الصف المظلّل في الأعلى: وجبة بدأت في الشهر السابق ووقع إضافيها (<span class="num">'+ fmtH(R.carryIn) +'</span>) في هذا الشهر.' : '')+
+        (R.carryOut ? '<br>الصف المظلّل في الأسفل: وجبة بدأت في آخر هذا الشهر وإضافيها (<span class="num">'+ fmtH(R.carryOut) +'</span>) سيظهر في كشف الشهر التالي.' : '')+
+      '</div>'+
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:24px;margin-top:36px">'+
         '<div class="sig-line">توقيع الموظف</div><div class="sig-line">مسؤول الشعبة</div><div class="sig-line">المدير الإداري</div>'+
       '</div></section>'+
