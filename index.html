@@ -966,8 +966,9 @@
     h += '<section class="card no-print" style="padding:14px;margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">'+
       '<div style="flex:1;min-width:180px"><label class="label" for="sheet_emp">الموظف</label>'+ empSelect("sheet_emp", ui.sheetEmp, false) +'</div>'+
       '<div style="flex:1;min-width:150px"><label class="label" for="sheet_month">الشهر</label><input id="sheet_month" type="month" value="'+ ui.sheetMonth +'" data-act="sheet-month"></div>'+
-      '<button class="btn btn-primary" data-act="print">طباعة أو حفظ PDF</button>'+
-      '<button class="btn" data-act="share">مشاركة ملخّص</button>'+
+      '<button class="btn btn-primary" data-act="pdf">مشاركة PDF</button>'+
+      '<button class="btn" data-act="print">طباعة</button>'+
+      '<button class="btn" data-act="share">ملخّص نصّي</button>'+
       '</section>';
     if(!ui.sheetEmp || !getEmp(ui.sheetEmp)) return h + emptyState("اختر موظفاً وشهراً", "ليظهر التايم شيت جاهزاً للطباعة.");
 
@@ -1173,6 +1174,7 @@
     }
     if(a === "clear-demo"){ state = { employees:[], records:{}, demo:false }; ui.sheetEmp=""; ui.calEmp="all"; save(); render(); return; }
     if(a === "print"){ doPrint(); return; }
+    if(a === "pdf"){ sharePdf(); return; }
     if(a === "share"){ shareSheet(); return; }
     if(a === "open-safari"){ closeModal(); window.open(location.href, "_blank"); return; }
 
@@ -1219,6 +1221,314 @@
     if(a === "sheet-month"){ ui.sheetMonth = el.value || ui.sheetMonth; render(); return; }
   });
 
+  /* ============ توليد PDF ============
+     نرسم الكشف على لوحة رسم (canvas) لأن محرّك الرسم في المتصفح يكتب العربية
+     موصولة وسليمة، ثم نغلّف الصورة داخل ملف PDF بُني يدوياً بلا أي مكتبة. */
+
+  var PG_W = 1240, PG_H = 1754, MG = 64;          // A4 بدقة 150
+  var C_INK = "#16221f", C_MUTED = "#5f716c", C_LINE = "#dde4e0",
+      C_ACCENT = "#22705f", C_WARN = "#9a5b10", C_SOFT = "#f1f4f2", C_WSOFT = "#fbecd7";
+
+  function fontAr(size, weight){ return (weight||400)+" "+size+"px 'IBM Plex Sans Arabic','Cairo',sans-serif; "; }
+
+  function pdfCtxSetup(ctx){
+    ctx.textBaseline = "middle";
+    ctx.direction = "rtl";
+  }
+  function txtR(ctx, s, x, y, size, color, weight){
+    ctx.font = (weight||400)+" "+size+"px 'IBM Plex Sans Arabic', 'Cairo', sans-serif";
+    ctx.fillStyle = color; ctx.direction = "rtl"; ctx.textAlign = "right";
+    ctx.fillText(s, x, y);
+  }
+  function txtL(ctx, s, x, y, size, color, weight){
+    ctx.font = (weight||400)+" "+size+"px 'IBM Plex Sans Arabic', 'Cairo', sans-serif";
+    ctx.fillStyle = color; ctx.direction = "rtl"; ctx.textAlign = "left";
+    ctx.fillText(s, x, y);
+  }
+  function txtC(ctx, s, x, y, size, color, weight, ltr){
+    ctx.font = (weight||400)+" "+size+"px 'IBM Plex Sans Arabic', 'Cairo', sans-serif";
+    ctx.fillStyle = color; ctx.direction = ltr ? "ltr" : "rtl"; ctx.textAlign = "center";
+    ctx.fillText(s, x, y);
+  }
+  function box(ctx, x, y, w, h, fill, stroke, r){
+    r = r || 10;
+    ctx.beginPath();
+    ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+    ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+    ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+    ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y); ctx.closePath();
+    if(fill){ ctx.fillStyle = fill; ctx.fill(); }
+    if(stroke){ ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+  }
+  function hline(ctx, x1, x2, y, color, w){
+    ctx.beginPath(); ctx.moveTo(x1,y); ctx.lineTo(x2,y);
+    ctx.strokeStyle = color; ctx.lineWidth = w||1; ctx.stroke();
+  }
+  // يقصّ النص إن تجاوز العرض المتاح
+  function fit(ctx, s, size, weight, maxW){
+    ctx.font = (weight||400)+" "+size+"px 'IBM Plex Sans Arabic', 'Cairo', sans-serif";
+    if(ctx.measureText(s).width <= maxW) return s;
+    var t = s;
+    while(t.length > 1 && ctx.measureText(t+"…").width > maxW) t = t.slice(0, -1);
+    return t + "…";
+  }
+
+  function drawSheet(R, logoImg){
+    var y = Number(R.ym.split("-")[0]), m = Number(R.ym.split("-")[1]) - 1;
+    var rows = R.rows, dayW = isDayWorker(R.emp);
+    var ROW_H = 46, HEAD_H = 52;
+    // ارتفاع سخيّ: الترويسة والبطاقات والأسابيع ورأس الجدول وأسطره والمجموع والتواقيع
+    var bodyH = 860 + HEAD_H + rows.length*ROW_H + ROW_H + 220;
+    var H = Math.max(PG_H, bodyH);
+
+    var cv = document.createElement("canvas");
+    cv.width = PG_W; cv.height = H;
+    var ctx = cv.getContext("2d");
+    pdfCtxSetup(ctx);
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, PG_W, H);
+
+    var R0 = PG_W - MG, L0 = MG, W = R0 - L0;
+    var cy = MG + 10;
+
+    /* الترويسة */
+    if(logoImg){ try{ ctx.drawImage(logoImg, R0 - 86, cy - 6, 86, 86); }catch(e){} }
+    txtR(ctx, "كشف الساعات الشهري", R0 - 100, cy + 24, 36, C_INK, 700);
+    txtR(ctx, ORG_NAME, R0 - 100, cy + 60, 20, C_MUTED, 400);
+    txtL(ctx, "الشهر: "+ MONTHS_AR[m] +" "+ y, L0, cy + 20, 20, C_INK, 400);
+    txtL(ctx, "تاريخ الإصدار: "+ fmtDate(todayStr()), L0, cy + 50, 20, C_MUTED, 400);
+    cy += 96;
+    hline(ctx, L0, R0, cy, C_ACCENT, 3);
+    cy += 24;
+
+    /* بطاقات الملخّص */
+    function tileBox(x, w, h, label, value, sub, vColor){
+      box(ctx, x, cy, w, h, C_SOFT, C_LINE);
+      txtR(ctx, label, x + w - 16, cy + 26, 17, C_MUTED, 600);
+      txtR(ctx, value, x + w - 16, cy + 62, 34, vColor || C_INK, 700);
+      if(sub) txtR(ctx, fit(ctx, sub, 15, 400, w - 32), x + w - 16, cy + 92, 15, C_MUTED, 400);
+    }
+    var gap = 12, cols = 3, cw = (W - gap*(cols-1)) / cols, bh = 112;
+
+    box(ctx, R0 - cw, cy, cw, bh, C_SOFT, C_LINE);
+    txtR(ctx, "الموظف", R0 - 16, cy + 24, 17, C_MUTED, 600);
+    txtR(ctx, fit(ctx, R.emp.name, 24, 700, cw - 32), R0 - 16, cy + 54, 24, C_INK, 700);
+    txtR(ctx, fit(ctx, R.emp.dept || "—", 16, 400, cw - 32), R0 - 16, cy + 80, 16, C_MUTED, 400);
+    txtR(ctx, fit(ctx, dayW ? ("دوام صباحي · "+ daysLabel(R.emp) +" · "+ empIn(R.emp) +"–"+ empOut(R.emp))
+                            : "مناوب · ٢٤ ساعة ثم ٣ أيام استراحة", 14, 400, cw - 32),
+         R0 - 16, cy + 100, 14, C_MUTED, 400);
+
+    tileBox(R0 - cw*2 - gap, cw, bh, "أيام الدوام الفعلي", String(R.worked), "من "+ R.scheduled +" يوم مجدول");
+    tileBox(L0, cw, bh, "أيام بلا بصمات", String(Math.max(0, R.scheduled - R.worked)), "تحتاج مراجعة");
+    cy += bh + gap;
+
+    tileBox(R0 - cw, cw, bh, "الساعات الأساسية", fmtH(R.base), "ساعة:دقيقة");
+    tileBox(R0 - cw*2 - gap, cw, bh, "الساعات الإضافية", fmtH(R.ot),
+            R.carryIn ? ("يشمل "+ fmtH(R.carryIn) +" مُرحّلة") : "تأخير ودوام العطل", C_WARN);
+    tileBox(L0, cw, bh, "مجموع الساعات", fmtH(R.total), "أساسي + إضافي");
+    cy += bh + 26;
+
+    /* الإضافي حسب الأسابيع */
+    txtR(ctx, "الساعات الإضافية حسب أسابيع الشهر", R0, cy + 10, 20, C_INK, 700);
+    cy += 32;
+    var n = R.weeks.length, wgap = 10, ww = (W - wgap*(n-1)) / n, wh = 92;
+    R.weeks.forEach(function(w, i){
+      var x = R0 - ww - i*(ww + wgap);
+      var hot = w.ot > 0;
+      box(ctx, x, cy, ww, wh, hot ? C_WSOFT : C_SOFT, hot ? C_WARN : C_LINE);
+      txtR(ctx, w.label, x + ww - 12, cy + 22, 15, C_MUTED, 600);
+      txtR(ctx, fmtH(w.ot), x + ww - 12, cy + 52, 28, hot ? C_WARN : C_MUTED, 700);
+      txtR(ctx, fit(ctx, "الأيام "+ w.from +"–"+ w.to +" · "+ w.days +" يوم دوام", 13, 400, ww - 24),
+           x + ww - 12, cy + 76, 13, C_MUTED, 400);
+    });
+    cy += wh + 26;
+
+    /* الجدول */
+    var heads = dayW
+      ? ["التاريخ","اليوم","النوع","دخول","خروج","دخول العودة","خروج العودة","أساسي","إضافي","ملاحظات"]
+      : ["التاريخ","اليوم","النوع","صباحية","وسطية","ليلية","صباح التالي","أساسي","إضافي","ملاحظات"];
+    var frac = [0.075,0.085,0.085,0.085,0.085,0.085,0.095,0.085,0.085,0.245];
+    var xs = [], acc = R0;
+    frac.forEach(function(f){ var w2 = W*f; xs.push({ x:acc - w2, w:w2 }); acc -= w2; });
+
+    var breaks = [];
+    box(ctx, L0, cy, W, HEAD_H, C_SOFT, C_LINE, 8);
+    heads.forEach(function(hd, i){ txtC(ctx, hd, xs[i].x + xs[i].w/2, cy + HEAD_H/2, 15, C_MUTED, 600); });
+    cy += HEAD_H;
+    var tableTop = cy;
+
+    rows.forEach(function(r){
+      var t = r.rec ? r.rec.t : [null,null,null,null];
+      if(r.carry) { ctx.fillStyle = C_WSOFT; ctx.fillRect(L0, cy, W, ROW_H); }
+      hline(ctx, L0, R0, cy + ROW_H, C_LINE, 1);
+      var d = parseD(r.date);
+      var typ = r.carry === "in" ? "ترحيل" : (r.duty ? "دوام" : (dayW ? "عطلة" : "استراحة"));
+      var cells = [
+        { v: String(d.getDate()) + (r.carry === "in" ? " "+ MONTHS_AR[d.getMonth()] : ""), ltr:false },
+        { v: dayName(r.date), ltr:false },
+        { v: typ, ltr:false, color: r.duty && r.carry !== "in" ? C_ACCENT : C_WARN },
+        { v: t[0] || "—", ltr:true }, { v: t[1] || "—", ltr:true },
+        { v: t[2] || "—", ltr:true }, { v: t[3] || "—", ltr:true },
+        { v: r.base ? fmtH(r.base) : "—", ltr:true },
+        { v: r.ot ? fmtH(r.ot) : "—", ltr:true, color: r.ot ? C_WARN : C_INK, weight: r.ot ? 700 : 400 },
+        { v: r.note || "", ltr:false }
+      ];
+      cells.forEach(function(c, i){
+        var s = fit(ctx, c.v, 15, c.weight || 400, xs[i].w - 10);
+        txtC(ctx, s, xs[i].x + xs[i].w/2, cy + ROW_H/2, 15, c.color || C_INK, c.weight || 400, c.ltr);
+      });
+      cy += ROW_H;
+      breaks.push(cy);
+    });
+
+    /* المجموع */
+    ctx.fillStyle = C_SOFT; ctx.fillRect(L0, cy, W, ROW_H);
+    txtR(ctx, "المجموع", xs[6].x + xs[6].w - 12, cy + ROW_H/2, 16, C_INK, 700);
+    txtC(ctx, fmtH(R.base), xs[7].x + xs[7].w/2, cy + ROW_H/2, 16, C_INK, 700, true);
+    txtC(ctx, fmtH(R.ot), xs[8].x + xs[8].w/2, cy + ROW_H/2, 16, C_WARN, 700, true);
+    txtC(ctx, fmtH(R.total), xs[9].x + xs[9].w/2, cy + ROW_H/2, 16, C_INK, 700, true);
+    hline(ctx, L0, R0, cy + ROW_H, C_LINE, 1);
+    cy += ROW_H + 70;
+    breaks.push(cy);
+
+    /* التواقيع */
+    var sigs = ["توقيع الموظف","مسؤول الشعبة","المدير الإداري"], sw = W/3;
+    sigs.forEach(function(s, i){
+      var x = R0 - sw - i*sw;
+      ctx.setLineDash([6,5]); hline(ctx, x + 20, x + sw - 20, cy, C_MUTED, 1); ctx.setLineDash([]);
+      txtC(ctx, s, x + sw/2, cy + 22, 16, C_MUTED, 400);
+    });
+    cy += 60;
+    breaks.push(cy);
+
+    return { canvas:cv, used:Math.max(cy, PG_H), breaks:breaks, tableTop:tableTop };
+  }
+
+  // يقصّ اللوحة الطويلة إلى صفحات A4 دون قطع أي سطر
+  function slicePages(res){
+    var pages = [], src = res.canvas, total = res.used, offset = 0;
+    var guard = 0;
+    while(offset < total - 2 && guard++ < 12){
+      var limit = offset + PG_H - MG;
+      var cut = total;
+      if(limit < total){
+        cut = offset + 200;
+        for(var i=0;i<res.breaks.length;i++){
+          if(res.breaks[i] > offset && res.breaks[i] <= limit) cut = res.breaks[i];
+        }
+        if(cut <= offset) cut = limit;
+      }
+      var pc = document.createElement("canvas");
+      pc.width = PG_W; pc.height = PG_H;
+      var c2 = pc.getContext("2d");
+      c2.fillStyle = "#ffffff"; c2.fillRect(0,0,PG_W,PG_H);
+      c2.drawImage(src, 0, offset, PG_W, cut - offset, 0, MG/2, PG_W, cut - offset);
+      pages.push(pc);
+      offset = cut;
+    }
+    return pages.length ? pages : [src];
+  }
+
+  /* بناء ملف PDF من صور الصفحات — بلا مكتبات */
+  function buildPdf(pages){
+    var enc = function(s){ var a = new Uint8Array(s.length); for(var i=0;i<s.length;i++) a[i] = s.charCodeAt(i) & 0xff; return a; };
+    var parts = [], offsets = [], len = 0;
+    function push(u8){ parts.push(u8); len += u8.length; }
+    function pushStr(s){ push(enc(s)); }
+
+    var PW = 595.28, PH = 841.89;
+    var nPages = pages.length;
+    var objCount = 2 + nPages*3;        // catalog + pages + (page, image, content) لكل صفحة
+    pushStr("%PDF-1.4\n");
+
+    function mark(i){ offsets[i] = len; }
+
+    mark(1); pushStr("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    var kids = [];
+    for(var i=0;i<nPages;i++) kids.push((3 + i*3) +" 0 R");
+    mark(2); pushStr("2 0 obj\n<< /Type /Pages /Kids ["+ kids.join(" ") +"] /Count "+ nPages +" >>\nendobj\n");
+
+    for(var p=0;p<nPages;p++){
+      var pageObj = 3 + p*3, imgObj = pageObj + 1, cntObj = pageObj + 2;
+      var cv = pages[p];
+      var dataUrl = cv.toDataURL("image/jpeg", 0.92);
+      var b64 = dataUrl.split(",")[1];
+      var bin = atob(b64);
+      var jpg = new Uint8Array(bin.length);
+      for(var k=0;k<bin.length;k++) jpg[k] = bin.charCodeAt(k);
+
+      mark(pageObj);
+      pushStr(pageObj +" 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 "+ PW.toFixed(2) +" "+ PH.toFixed(2) +"]"+
+              " /Resources << /XObject << /Im0 "+ imgObj +" 0 R >> >> /Contents "+ cntObj +" 0 R >>\nendobj\n");
+
+      mark(imgObj);
+      pushStr(imgObj +" 0 obj\n<< /Type /XObject /Subtype /Image /Width "+ cv.width +" /Height "+ cv.height +
+              " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length "+ jpg.length +" >>\nstream\n");
+      push(jpg);
+      pushStr("\nendstream\nendobj\n");
+
+      var content = "q "+ PW.toFixed(2) +" 0 0 "+ PH.toFixed(2) +" 0 0 cm /Im0 Do Q\n";
+      mark(cntObj);
+      pushStr(cntObj +" 0 obj\n<< /Length "+ content.length +" >>\nstream\n"+ content +"endstream\nendobj\n");
+    }
+
+    var xrefPos = len;
+    var xref = "xref\n0 "+ (objCount+1) +"\n0000000000 65535 f \n";
+    for(var o=1;o<=objCount;o++){
+      xref += ("0000000000" + (offsets[o]||0)).slice(-10) + " 00000 n \n";
+    }
+    pushStr(xref);
+    pushStr("trailer\n<< /Size "+ (objCount+1) +" /Root 1 0 R >>\nstartxref\n"+ xrefPos +"\n%%EOF\n");
+
+    var out = new Uint8Array(len), at = 0;
+    parts.forEach(function(u){ out.set(u, at); at += u.length; });
+    return out;
+  }
+
+  function loadLogo(){
+    return new Promise(function(res){
+      var v = getComputedStyle(document.documentElement).getPropertyValue("--logo") || "";
+      var m = v.match(/url\(["']?(data:image\/png;base64,[^"')]+)["']?\)/);
+      if(!m) return res(null);
+      var im = new Image();
+      im.onload = function(){ res(im); };
+      im.onerror = function(){ res(null); };
+      im.src = m[1];
+    });
+  }
+
+  function makePdf(){
+    if(!ui.sheetEmp || !getEmp(ui.sheetEmp)) { flash("اختر موظفاً وشهراً أولاً."); return Promise.reject(); }
+    var R = monthReport(ui.sheetEmp, ui.sheetMonth);
+    var ready = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
+    return ready.then(loadLogo).then(function(logo){
+      var res = drawSheet(R, logo);
+      var pages = slicePages(res);
+      var bytes = buildPdf(pages);
+      var name = "كشف-"+ R.emp.name.replace(/\s+/g,"-") +"-"+ R.ym +".pdf";
+      return { blob: new Blob([bytes], { type:"application/pdf" }), name:name, R:R };
+    });
+  }
+
+  function sharePdf(){
+    closeModal();
+    flash("جارٍ تجهيز ملف PDF…");
+    makePdf().then(function(out){
+      var file = null;
+      try{ file = new File([out.blob], out.name, { type:"application/pdf" }); }catch(e){}
+      var caption = "كشف الساعات · "+ out.R.emp.name +" · "+ out.R.ym;
+      if(file && navigator.canShare && navigator.canShare({ files:[file] }) && navigator.share){
+        navigator.share({ files:[file], title:"كشف الساعات", text:caption }).catch(function(){});
+        return;
+      }
+      var url = URL.createObjectURL(out.blob);
+      var a = document.createElement("a");
+      a.href = url; a.download = out.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 6000);
+      flash("حُفظ ملف PDF — تجده في «التنزيلات» أو «الملفات».");
+    }).catch(function(){ flash("تعذّر إنشاء ملف PDF."); });
+  }
+
   /* ============ الطباعة والمشاركة ============ */
   function isStandaloneIOS(){
     var ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -1239,7 +1549,8 @@
           '<li>زر المشاركة ← <b>خيارات</b> أعلى القائمة ← اختر <b>PDF</b> ← ثم واتساب أو «حفظ في الملفات».</li>'+
         '</ol>'+
         '<div style="display:grid;gap:8px">'+
-          '<button class="btn btn-primary" data-act="open-safari">فتح الكشف في Safari</button>'+
+          '<button class="btn btn-primary" data-act="pdf">مشاركة الكشف PDF مباشرة</button>'+
+          '<button class="btn" data-act="open-safari">فتح الكشف في Safari</button>'+
           '<button class="btn" data-act="share">مشاركة ملخّص نصّي بدل ذلك</button>'+
           '<button class="btn btn-ghost" data-act="modal-close">إغلاق</button>'+
         '</div>');
