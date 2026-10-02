@@ -183,6 +183,8 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" id="lockBtn" data-act="lock-toggle">🔒 مقفل</button>
+          <button class="btn btn-sm" id="pinBtn" data-act="set-pin" hidden>تغيير الرمز</button>
           <span id="netPill" class="pill pill-ot" hidden>غير متصل</span><button class="btn btn-sm btn-primary" id="installBtn" hidden>تثبيت التطبيق</button><button class="btn btn-sm" data-act="backup">نسخة احتياطية</button>
           <button class="btn btn-sm" data-act="restore-open">استعادة</button>
         </div>
@@ -210,11 +212,52 @@
   document.documentElement.setAttribute("dir","rtl");
   document.documentElement.setAttribute("lang","ar");
 
+  /* ===================================================================
+     الرمز السري للمشرف
+     غيّر الرقم بين علامتي التنصيص ثم ارفع الملف إلى GitHub.
+     تنبيه: من يفتح كود المستودع العام يستطيع قراءة هذا الرقم.
+     =================================================================== */
+  var ADMIN_PIN = "1234";
+
   /* ============ التخزين ============ */
   var KEY = "shift_attendance_v1";
   var state = { employees:[], records:{}, demo:false };
   var ui = { tab:"today", day:todayStr(), calMonth:monthStr(new Date()), calEmp:"all",
-             sheetEmp:"", sheetMonth:monthStr(new Date()), editing:null, confirmDel:null };
+             sheetEmp:"", sheetMonth:monthStr(new Date()), editing:null, confirmDel:null,
+             unlocked:false };
+
+  /* ============ قفل المشرف ============
+     بلا رمز: البصمة بزر «الآن» والعرض والطباعة.
+     بالرمز: تعديل الأوقات يدوياً، وإدارة الموظفين، والاستعادة. */
+  var ADMIN_ACTS = { "settime":1, "save-emp":1, "edit-emp":1, "cancel-edit":1,
+                     "del-emp":1, "del-emp-yes":1, "del-emp-no":1, "clear-demo":1,
+                     "restore-open":1, "restore-apply":1, "del-rest":1, "del-extra":1,
+                     "set-pin":1 };
+  var AUTO_LOCK_MS = 5 * 60 * 1000, lockTimer = null;
+
+  function currentPin(){
+    try{ return localStorage.getItem("admin_pin_override") || ADMIN_PIN; }catch(e){ return ADMIN_PIN; }
+  }
+  function touchLock(){
+    if(!ui.unlocked) return;
+    clearTimeout(lockTimer);
+    lockTimer = setTimeout(function(){
+      ui.unlocked = false; render(); flash("أُقفل التطبيق تلقائياً بعد خمس دقائق.");
+    }, AUTO_LOCK_MS);
+  }
+  function lockNow(){ ui.unlocked = false; clearTimeout(lockTimer); render(); }
+  function applyLock(){
+    var locked = !ui.unlocked;
+    view.querySelectorAll('input[type="time"]').forEach(function(i){ i.disabled = locked; });
+    view.querySelectorAll('[data-admin]').forEach(function(e){ e.hidden = locked; });
+    var b = document.getElementById("lockBtn");
+    if(b){
+      b.textContent = locked ? "🔒 مقفل" : "🔓 إقفال";
+      b.className = locked ? "btn btn-sm" : "btn btn-sm btn-primary";
+    }
+    var cb = document.getElementById("pinBtn");
+    if(cb) cb.hidden = locked;
+  }
 
   function load(){
     try{
@@ -524,11 +567,12 @@
     else if(ui.tab === "staff") view.innerHTML = viewStaff();
     else if(ui.tab === "calendar") view.innerHTML = viewCalendar();
     else view.innerHTML = viewSheet();
+    applyLock();
   }
 
   function demoBanner(){
     if(!state.demo) return "";
-    return '<div class="soft no-print" style="padding:10px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px">'+
+    return '<div class="soft no-print" data-admin="1" style="padding:10px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px">'+
       '<div style="font-size:13px;color:var(--muted)">البيانات المعروضة تجريبية للتوضيح — امسحها قبل إدخال موظفيك.</div>'+
       '<button class="btn btn-sm btn-danger" data-act="clear-demo">مسح البيانات التجريبية</button></div>';
   }
@@ -666,7 +710,7 @@
       extra = '<div style="margin-top:10px">'+
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'+
           '<div style="font-size:12px;font-weight:600;color:var(--warn)">عودة بعد الدوام</div>'+
-          '<button class="btn btn-sm btn-danger" data-act="del-extra" data-emp="'+ emp.id +'" data-date="'+ d +'">إلغاء</button>'+
+          '<button class="btn btn-sm btn-danger" data-admin="1" data-act="del-extra" data-emp="'+ emp.id +'" data-date="'+ d +'">إلغاء</button>'+
         '</div>'+
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">'+
           field(2, "دخول العودة", "") +
@@ -725,7 +769,7 @@
         '</div>'+
         '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">'+
         (r.complete ? '<span class="pill pill-ot">إضافي <span class="num">'+ fmtH(r.ot) +'</span></span>' : '<span class="pill pill-rest">أكمل وقت النهاية</span>')+
-        '<button class="btn btn-sm btn-danger" data-act="del-rest" data-emp="'+emp.id+'" data-date="'+d+'">إلغاء التسجيل</button></div>';
+        '<button class="btn btn-sm btn-danger" data-admin="1" data-act="del-rest" data-emp="'+emp.id+'" data-date="'+d+'">إلغاء التسجيل</button></div>';
     }
     return '<article class="card" style="padding:12px 14px;margin-bottom:10px">'+
       '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">'+
@@ -739,7 +783,7 @@
   function viewStaff(){
     var ed = ui.editing;
     var h = demoBanner();
-    h += '<section class="card" style="padding:16px;margin-bottom:16px">'+
+    h += '<section class="card" data-admin="1" style="padding:16px;margin-bottom:16px">'+
       '<h2 style="font-size:15px;margin:0 0 12px">'+ (ed ? "تعديل بيانات موظف" : "إضافة موظف") +'</h2>'+
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">'+
         '<div><label class="label" for="f_name">اسم الموظف</label><input id="f_name" value="'+ esc(ed?ed.name:"") +'" placeholder="الاسم الثلاثي"></div>'+
@@ -801,7 +845,7 @@
         '<td>'+ (duty ? '<span class="pill pill-duty">دوام</span>'
                       : '<span class="pill pill-rest">'+ (dayW ? "عطلة" : "استراحة") +'</span>') +'</td>'+
         '<td style="font-size:12px"><span class="tnum">'+ esc(next) +'</span> · '+ dayName(next) +'</td>'+
-        '<td class="no-print" style="white-space:nowrap">'+ del +'</td></tr>';
+        '<td class="no-print" data-admin="1" style="white-space:nowrap">'+ del +'</td></tr>';
     });
     h += '</tbody></table></div></section>';
     return h;
@@ -1008,6 +1052,32 @@
     var el = ev.target.closest("[data-act]"); if(!el) return;
     var a = el.dataset.act;
 
+    if(a === "lock-toggle"){
+      if(ui.unlocked) lockNow(); else openPin();
+      return;
+    }
+    if(a === "pin-submit"){
+      var v = (document.getElementById("pin_in").value||"").trim();
+      if(v === currentPin()){
+        ui.unlocked = true; closeModal(); touchLock(); render();
+        flash("فُتح وضع المشرف. يُقفل تلقائياً بعد خمس دقائق.");
+      } else {
+        document.getElementById("pin_err").textContent = "الرمز غير صحيح.";
+      }
+      return;
+    }
+    if(a === "pin-save"){
+      var n1 = (document.getElementById("pin_new").value||"").trim();
+      var n2 = (document.getElementById("pin_new2").value||"").trim();
+      if(n1.length < 4){ document.getElementById("pin_err2").textContent = "الرمز أربعة أرقام على الأقل."; return; }
+      if(n1 !== n2){ document.getElementById("pin_err2").textContent = "الرمزان غير متطابقين."; return; }
+      try{ localStorage.setItem("admin_pin_override", n1); }catch(e){}
+      closeModal(); flash("تغيّر الرمز على هذا الجهاز فقط.");
+      return;
+    }
+    if(ADMIN_ACTS[a] && !ui.unlocked){ openPin(); return; }
+    touchLock();
+
     if(a === "day"){
       var v = Number(el.dataset.v);
       ui.day = v === 0 ? todayStr() : addDays(ui.day, v);
@@ -1085,6 +1155,7 @@
       copyText(data, el); return;
     }
     if(a === "restore-open"){ openRestore(); return; }
+    if(a === "set-pin"){ openPinChange(); return; }
     if(a === "modal-close"){ closeModal(); return; }
     if(a === "restore-apply"){
       var txt = document.getElementById("restore_txt").value;
@@ -1101,6 +1172,8 @@
   document.addEventListener("change", function(ev){
     var el = ev.target.closest("[data-act]"); if(!el) return;
     var a = el.dataset.act;
+    if(ADMIN_ACTS[a] && !ui.unlocked){ render(); openPin(); return; }
+    touchLock();
     if(a === "settime"){
       var rec = ensureRec(el.dataset.emp, el.dataset.date, el.dataset.type);
       rec.t[Number(el.dataset.slot)] = el.value || null;
@@ -1132,6 +1205,30 @@
       '<textarea rows="10" readonly>'+ esc(txt) +'</textarea>'+
       '<div style="display:flex;justify-content:flex-start;margin-top:12px"><button class="btn" data-act="modal-close">إغلاق</button></div>');
   }
+  function openPin(){
+    openModal('<h2 style="font-size:16px;margin:0 0 8px">وضع المشرف</h2>'+
+      '<p style="font-size:13px;color:var(--muted);margin:0 0 10px">تعديل أوقات البصمات وإدارة الموظفين يحتاج رمز المشرف. تسجيل البصمة بزر «الآن» لا يحتاج رمزاً.</p>'+
+      '<input id="pin_in" type="password" inputmode="numeric" autocomplete="off" placeholder="الرمز السري" style="text-align:center;letter-spacing:.3em;font-size:18px">'+
+      '<div id="pin_err" style="color:var(--danger);font-size:12px;margin-top:6px"></div>'+
+      '<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" data-act="pin-submit">فتح</button>'+
+      '<button class="btn" data-act="modal-close">إلغاء</button></div>');
+    var f = document.getElementById("pin_in");
+    if(f){ f.focus(); f.addEventListener("keydown", function(e){ if(e.key === "Enter"){
+      var btn = document.querySelector('[data-act="pin-submit"]'); if(btn) btn.click(); } }); }
+  }
+
+  function openPinChange(){
+    openModal('<h2 style="font-size:16px;margin:0 0 8px">تغيير الرمز على هذا الجهاز</h2>'+
+      '<p style="font-size:13px;color:var(--muted);margin:0 0 10px">الرمز الجديد يسري على هذا الجهاز وحده ويبقى حتى لو حُدّث التطبيق. بقية الأجهزة تبقى على الرمز الموجود في الكود.</p>'+
+      '<div style="display:grid;gap:8px">'+
+        '<input id="pin_new" type="password" inputmode="numeric" autocomplete="off" placeholder="الرمز الجديد">'+
+        '<input id="pin_new2" type="password" inputmode="numeric" autocomplete="off" placeholder="تأكيد الرمز الجديد">'+
+      '</div>'+
+      '<div id="pin_err2" style="color:var(--danger);font-size:12px;margin-top:6px"></div>'+
+      '<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" data-act="pin-save">حفظ</button>'+
+      '<button class="btn" data-act="modal-close">إلغاء</button></div>');
+  }
+
   function openRestore(){
     openModal('<h2 style="font-size:16px;margin:0 0 8px">استعادة نسخة احتياطية</h2>'+
       '<p style="font-size:13px;color:var(--muted);margin:0 0 10px">الصق نص النسخة الاحتياطية هنا. سيحل محل البيانات الحالية.</p>'+
