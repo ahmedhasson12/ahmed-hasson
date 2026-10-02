@@ -17,6 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   *,*::before,*::after{box-sizing:border-box}
   html,body{margin:0;padding:0}
@@ -954,6 +955,7 @@
       '<div style="flex:1;min-width:180px"><label class="label" for="sheet_emp">الموظف</label>'+ empSelect("sheet_emp", ui.sheetEmp, false) +'</div>'+
       '<div style="flex:1;min-width:150px"><label class="label" for="sheet_month">الشهر</label><input id="sheet_month" type="month" value="'+ ui.sheetMonth +'" data-act="sheet-month"></div>'+
       '<button class="btn btn-primary" data-act="print">طباعة الكشف</button>'+
+      '<button class="btn" data-act="share">مشاركة الكشف</button>'+
       '</section>';
     if(!ui.sheetEmp || !getEmp(ui.sheetEmp)) return h + emptyState("اختر موظفاً وشهراً", "ليظهر التايم شيت جاهزاً للطباعة.");
 
@@ -1148,7 +1150,9 @@
       ui.confirmDel = null; save(); render(); return;
     }
     if(a === "clear-demo"){ state = { employees:[], records:{}, demo:false }; ui.sheetEmp=""; ui.calEmp="all"; save(); render(); return; }
-    if(a === "print"){ window.print(); return; }
+    if(a === "print"){ doPrint(); return; }
+    if(a === "share"){ shareSheet(); return; }
+    if(a === "open-safari"){ closeModal(); window.open(location.href, "_blank"); return; }
 
     if(a === "backup"){
       var data = JSON.stringify({ employees:state.employees, records:state.records }, null, 2);
@@ -1192,6 +1196,128 @@
     if(a === "sheet_emp"){ ui.sheetEmp = el.value; render(); return; }
     if(a === "sheet-month"){ ui.sheetMonth = el.value || ui.sheetMonth; render(); return; }
   });
+
+  /* ============ الطباعة والمشاركة ============ */
+  function isStandaloneIOS(){
+    var ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+              (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    var standalone = navigator.standalone === true ||
+                     (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+    return ios && standalone;
+  }
+
+  function doPrint(){
+    // iOS لا يفتح نافذة الطباعة داخل التطبيق المثبَّت على الشاشة الرئيسية
+    if(isStandaloneIOS()){
+      openModal('<h2 style="font-size:16px;margin:0 0 8px">الطباعة من الآيفون</h2>'+
+        '<p style="font-size:13px;color:var(--muted);margin:0 0 12px;line-height:1.8">'+
+        'نظام iOS لا يسمح بفتح نافذة الطباعة داخل التطبيق المثبَّت على الشاشة الرئيسية. أمامك طريقان:</p>'+
+        '<div style="display:grid;gap:8px">'+
+          '<button class="btn btn-primary" data-act="share">حفظ الكشف صورة أو مشاركته</button>'+
+          '<button class="btn" data-act="open-safari">فتح الكشف في Safari للطباعة</button>'+
+          '<button class="btn btn-ghost" data-act="modal-close">إغلاق</button>'+
+        '</div>'+
+        '<p style="font-size:12px;color:var(--muted);margin:12px 0 0;line-height:1.8">'+
+        'في Safari: زر المشاركة ← «طباعة»، ومن نافذة الطباعة يمكنك الحفظ بصيغة PDF.</p>');
+      return;
+    }
+    window.print();
+  }
+
+  function sheetFileName(){
+    var e = getEmp(ui.sheetEmp);
+    return "كشف-"+ ((e && e.name) ? e.name.replace(/\s+/g,"-") : "موظف") +"-"+ ui.sheetMonth +".png";
+  }
+
+  // ملخّص نصّي للكشف — بديل مضمون يعمل بلا إنترنت وبلا أي مكوّن خارجي
+  function buildSheetText(){
+    var R = monthReport(ui.sheetEmp, ui.sheetMonth);
+    var y = Number(R.ym.split("-")[0]), m = Number(R.ym.split("-")[1]) - 1;
+    var L = [];
+    L.push("كشف الساعات الشهري");
+    L.push("الموظف: "+ R.emp.name + (R.emp.dept ? " — "+ R.emp.dept : ""));
+    L.push("الشهر: "+ MONTHS_AR[m] +" "+ y);
+    L.push("");
+    L.push("أيام الدوام الفعلي: "+ R.worked +" من "+ R.scheduled);
+    L.push("الساعات الأساسية: "+ fmtH(R.base));
+    L.push("الساعات الإضافية: "+ fmtH(R.ot));
+    L.push("مجموع الساعات: "+ fmtH(R.total));
+    L.push("");
+    L.push("الإضافي حسب الأسابيع:");
+    R.weeks.forEach(function(w){ L.push("• "+ w.label +" ("+ w.from +"–"+ w.to +"): "+ fmtH(w.ot)); });
+    var worked = R.rows.filter(function(r){ return r.base || r.ot; });
+    if(worked.length){
+      L.push("");
+      L.push("الأيام المحتسبة:");
+      worked.forEach(function(r){
+        var d = parseD(r.date);
+        L.push("• "+ d.getDate() +" "+ MONTHS_AR[d.getMonth()] +" ("+ dayName(r.date) +") — أساسي "+
+               fmtH(r.base) +" · إضافي "+ fmtH(r.ot) + (r.note ? " · "+ r.note : ""));
+      });
+    }
+    return L.join("\n");
+  }
+
+  function shareText(){
+    var txt = buildSheetText();
+    if(navigator.share){
+      navigator.share({ title:"كشف الساعات", text:txt }).catch(function(){});
+    } else {
+      var b = document.querySelector('[data-act="share"]');
+      copyText(txt, b || document.body);
+      flash("نُسخ الكشف نصاً — الصقه في واتساب.");
+    }
+  }
+
+  function shareSheet(){
+    closeModal();
+    var el = document.querySelector("#view .paper");
+    if(!el){ flash("اختر موظفاً وشهراً أولاً."); return; }
+    if(typeof html2canvas !== "function"){ shareText(); return; }
+    flash("جارٍ تجهيز صورة الكشف…");
+
+    // نلتقط الكشف بالوضع الفاتح دائماً ليخرج نظيفاً مهما كان وضع الجهاز
+    var root = document.documentElement, prevTheme = root.getAttribute("data-theme");
+    root.setAttribute("data-theme", "light");
+
+    function restore(){
+      if(prevTheme) root.setAttribute("data-theme", prevTheme);
+      else root.removeAttribute("data-theme");
+    }
+
+    html2canvas(el, {
+      backgroundColor: "#ffffff",
+      scale: Math.min(2, window.devicePixelRatio || 1) * 1.5,
+      logging: false,
+      ignoreElements: function(n){ return n.classList && n.classList.contains("no-print"); }
+    }).then(function(canvas){
+      restore();
+      canvas.toBlob(function(blob){
+        if(!blob){ flash("تعذّر إنشاء الصورة."); return; }
+        var name = sheetFileName();
+        var emp = getEmp(ui.sheetEmp);
+        var caption = "كشف الساعات الشهري · "+ ((emp && emp.name) || "") +" · "+ ui.sheetMonth;
+        var file = null;
+        try{ file = new File([blob], name, { type:"image/png" }); }catch(e){}
+
+        if(file && navigator.canShare && navigator.canShare({ files:[file] }) && navigator.share){
+          navigator.share({ files:[file], title:"كشف الساعات", text:caption })
+            .catch(function(){ /* ألغى المستخدم المشاركة */ });
+          return;
+        }
+        // بديل: تنزيل الصورة ثم مشاركتها يدوياً
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+        flash("حُفظت صورة الكشف — شاركها من تطبيق الصور أو الملفات.");
+      }, "image/png");
+    }).catch(function(){
+      restore();
+      shareText();   // تعذّرت الصورة — نشارك الملخّص النصّي
+    });
+  }
 
   function copyText(txt, btn){
     var done = function(){ var o = btn.textContent; btn.textContent = "تم النسخ ✓"; setTimeout(function(){ btn.textContent = o; }, 1800); };

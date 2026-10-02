@@ -1,7 +1,7 @@
 /* سجل المناوبات — عامل الخدمة (Service Worker)
    يخزّن ملفات التطبيق ليعمل كاملاً بدون إنترنت. */
 
-const VERSION = "shift-attendance-v9";
+const VERSION = "shift-attendance-v10";
 const CORE = [
   "./",
   "./index.html",
@@ -63,7 +63,8 @@ self.addEventListener("fetch", (event) => {
       const fresh = await fetch(req);
       if (fresh && (fresh.ok || fresh.type === "opaque")) {
         const isFont = url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com";
-        if (sameOrigin || isFont) {
+        const isLib = url.hostname === "cdnjs.cloudflare.com";
+        if (sameOrigin || isFont || isLib) {
           const cache = await caches.open(VERSION);
           cache.put(req, fresh.clone());
         }
