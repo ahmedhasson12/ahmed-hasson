@@ -128,6 +128,8 @@
   input,select,textarea{font-family:inherit;font-size:14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px 10px;width:100%}
   input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:var(--accent)}
   input[type="time"],input[type="date"]{font-variant-numeric:tabular-nums}
+  /* حقول الوقت تقبل الانكماش كي لا تزاحم زر «الآن» على الشاشات الضيقة */
+  input[type="time"]{min-width:0}
   .pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;border:1px solid transparent}
   .pill-duty{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
   .pill-rest{background:var(--surface-2);color:var(--muted);border-color:var(--line)}
@@ -250,8 +252,25 @@
   function fmtH(m){ if(!m || m<=0) return "0:00"; return Math.floor(m/60)+":"+pad(m%60); }
 
   /* ============ منطق الدوريات ============ */
+  // الافتراضات للدوام الصباحي: الأحد–الخميس، ٧:١٥ إلى ٢:٠٠ ظهراً
+  var DEF_DAYS = [0,1,2,3,4], DEF_IN = "07:15", DEF_OUT = "14:00", DEF_GRACE = 15;
+  function isDayWorker(e){ return !!e && e.type === "day"; }
+  function empIn(e){ return (e && e.startTime) || DEF_IN; }
+  function empOut(e){ return (e && e.endTime) || DEF_OUT; }
+  function empDays(e){ return (e && e.workDays && e.workDays.length) ? e.workDays : DEF_DAYS; }
+  function empGrace(e){ return (e && e.grace != null) ? Number(e.grace) : DEF_GRACE; }
+  function daysLabel(e){
+    var ws = empDays(e).slice().sort(function(a,b){ return a-b; });
+    if(ws.length === 7) return "كل الأيام";
+    var seq = ws.every(function(v,i){ return i === 0 || v === ws[i-1]+1; });
+    return seq && ws.length > 1 ? DAYS_AR[ws[0]]+" – "+DAYS_AR[ws[ws.length-1]]
+                                : ws.map(function(v){ return DAYS_AR[v]; }).join("، ");
+  }
+
   function isDutyDay(emp, ds){
-    if(!emp || !emp.startDate) return false;
+    if(!emp) return false;
+    if(isDayWorker(emp)) return empDays(emp).indexOf(parseD(ds).getDay()) >= 0;
+    if(!emp.startDate) return false;
     var d = diffDays(emp.startDate, ds);
     return ((d % 4) + 4) % 4 === 0;
   }
@@ -282,7 +301,39 @@
     out.short = Math.max(24*60 - dur, 0);
     return out;
   }
-  // الدوام في يوم الاستراحة: كل الساعات إضافية
+  /* الدوام الصباحي — أربع خانات:
+     t0 دخول الدوام · t1 خروج الدوام · t2 دخول العودة الإضافية · t3 خروج العودة
+     البقاء بعد نهاية الدوام الرسمي إضافي، وكذلك فترة العودة كاملة.
+     إذا بات في الدوام فخروجه صباح اليوم التالي، فتُقسَم ساعاته عند منتصف الليل. */
+  function dayStats(emp, rec){
+    var o = { started:false, complete:false, base:0, ot:0, otNext:0,
+              late:0, short:0, extraOpen:false, overnight:false };
+    if(!rec) return o;
+    var t0 = mins(rec.t[0]), t1 = mins(rec.t[1]), t2 = mins(rec.t[2]), t3 = mins(rec.t[3]);
+    o.started = t0 !== null;
+    if(t0 === null) return o;
+
+    var os = mins(empIn(emp)), oe = mins(empOut(emp)), official = oe - os;
+    if(t1 !== null){
+      o.complete = true;
+      // سماح الخروج المبكر: الخروج قبل نهاية الدوام بمدة السماح يُعدّ دواماً كاملاً
+      var g = empGrace(emp);
+      var effEnd = (t1 < oe && oe - t1 <= g) ? oe : t1;
+      o.early = Math.max(0, oe - t1);
+      o.base = Math.max(0, Math.min(Math.min(effEnd, oe) - Math.max(t0, os), official));
+      o.ot = Math.max(0, t1 - oe);
+      o.late = Math.max(0, t0 - os);
+      o.short = Math.max(0, official - o.base);
+    }
+    if(t2 !== null){
+      if(t3 === null) o.extraOpen = true;
+      else if(t3 >= t2) o.ot += (t3 - t2);
+      else { o.ot += (24*60 - t2); o.otNext = t3; o.overnight = true; }
+    }
+    return o;
+  }
+
+  // الدوام في يوم الاستراحة أو العطلة: كل الساعات إضافية
   function restStats(rec){
     var out = { started:false, complete:false, ot:0 };
     if(!rec) return out;
@@ -305,11 +356,17 @@
     if(!isDutyDay(emp, ds)){
       var r = getRec(empId, ds);
       if(r) total += restStats(r).ot;
+    } else if(isDayWorker(emp)){
+      var dr = getRec(empId, ds);
+      if(dr) total += dayStats(emp, dr).ot;   // البقاء بعد الدوام يقع في اليوم نفسه
     }
     var prev = addDays(ds, -1);
     if(isDutyDay(emp, prev)){
       var rec = getRec(empId, prev);
-      if(rec) total += dutyStats(rec).ot;
+      if(rec){
+        // المناوب: تأخّر الخروج يقع في اليوم التالي · الصباحي: ساعات المبيت بعد منتصف الليل
+        total += isDayWorker(emp) ? dayStats(emp, rec).otNext : dutyStats(rec).ot;
+      }
     }
     return total;
   }
@@ -325,14 +382,53 @@
     var rows = [], scheduled = 0, worked = 0, restWorked = 0;
     var base = 0, ot = 0, openShifts = 0, carryIn = 0, carryOut = 0;
 
-    // نبدأ المسح من اليوم السابق للشهر: وجبة بدأت أواخر الشهر الماضي قد يقع إضافيها هنا
+    var dayW = isDayWorker(emp);
+    // نبدأ المسح من اليوم السابق للشهر: وجبة أو مبيت بدأ أواخر الشهر الماضي قد يقع إضافيه هنا
     var ds = addDays(firstDate, -1);
     while(ds <= lastDate){
       var duty = isDutyDay(emp, ds);
       var rec = getRec(empId, ds);
       var otDate = addDays(ds, 1);
 
-      if(duty && rec && !inMonth(ds)){
+      if(dayW){
+        var sd = duty ? dayStats(emp, rec) : null;
+        if(duty && !inMonth(ds)){
+          // مبيت بدأ آخر الشهر الماضي وامتدّ إلى أول هذا الشهر
+          if(sd.otNext > 0 && inMonth(otDate)){
+            ot += sd.otNext; carryIn += sd.otNext;
+            rows.push({ date:ds, duty:true, rec:rec, base:0, ot:sd.otNext, carry:"in",
+                        note:"إضافي مبيت مُرحّل من "+ fmtDate(ds) });
+          }
+        } else if(duty){
+          scheduled++;
+          var rd = { date:ds, duty:true, rec:rec, base:0, ot:0, carry:null, note:"" };
+          var nts = [];
+          if(sd.started) worked++;
+          if(sd.complete){
+            rd.base = sd.base; base += sd.base;
+            rd.ot = sd.ot; ot += sd.ot;
+            if(sd.late > 0) nts.push("تأخير "+ fmtH(sd.late));
+            if(sd.ot > 0) nts.push("إضافي بعد "+ empOut(emp));
+            if(sd.short > 0) nts.push("نقص "+ fmtH(sd.short));
+          } else if(sd.started){ nts.push("بدون بصمة خروج"); openShifts++; }
+          else nts.push(rec ? "بصمات ناقصة" : "بدون بصمات");
+          if(sd.extraOpen) nts.push("عودة بلا بصمة خروج");
+          if(sd.otNext > 0){
+            if(inMonth(otDate)){ rd.ot += sd.otNext; ot += sd.otNext; nts.push("مبيت حتى صباح اليوم التالي"); }
+            else { carryOut += sd.otNext; rd.carry = "out";
+                   nts.push("إضافي مبيت "+ fmtH(sd.otNext) +" رُحّل إلى الشهر التالي"); }
+          }
+          rd.note = nts.length ? nts.join(" · ") : "مكتمل";
+          rows.push(rd);
+        } else if(rec && inMonth(ds)){
+          var rh = restStats(rec);
+          var rr = { date:ds, duty:false, rec:rec, base:0, ot:0, carry:null, note:"" };
+          if(rh.started) restWorked++;
+          if(rh.complete){ rr.ot = rh.ot; ot += rh.ot; rr.note = "دوام في يوم عطلة"; }
+          else rr.note = "تسجيل غير مكتمل";
+          rows.push(rr);
+        }
+      } else if(duty && rec && !inMonth(ds)){
         // ترحيل وارد من الشهر السابق: الساعات الإضافية فقط
         var sIn = dutyStats(rec);
         if(sIn.complete && sIn.ot > 0 && inMonth(otDate)){
@@ -400,7 +496,9 @@
     var e1 = { id:"e1", name:"أحمد كاظم عبد", dept:"شعبة الصيانة", startDate:t };
     var e2 = { id:"e2", name:"حسين عبد الله جبر", dept:"شعبة الحراسات", startDate:addDays(t,-1) };
     var e3 = { id:"e3", name:"زينب محمد علي", dept:"شعبة السيطرة", startDate:addDays(t,-2) };
-    state.employees = [e1,e2,e3];
+    var e4 = { id:"e4", name:"مروان سالم داود", dept:"الشؤون الإدارية", type:"day",
+               startTime:DEF_IN, endTime:DEF_OUT, workDays:DEF_DAYS.slice(), grace:DEF_GRACE };
+    state.employees = [e1,e2,e3,e4];
     state.records = {};
     // وجبة سابقة مكتملة مع ساعة ونصف إضافية
     state.records[rkey("e1", addDays(t,-4))] = { type:"duty", t:["07:00","14:10","22:05","08:30"] };
@@ -438,8 +536,12 @@
   /* ---------- لوحة اليوم ---------- */
   function viewToday(){
     var d = ui.day;
-    var onDuty = [], ending = [], resting = [];
+    var onDuty = [], ending = [], resting = [], morning = [];
     state.employees.forEach(function(e){
+      if(isDayWorker(e)){
+        if(isDutyDay(e, d)) morning.push(e); else resting.push(e);
+        return;
+      }
       if(isDutyDay(e, d)){ onDuty.push(e); return; }
       // اليوم الأول من الاستراحة يحتاج بصمة نهاية وجبة الأمس، ويبقى مع ذلك في قائمة الاستراحة
       if(isDutyDay(e, addDays(d,-1))) ending.push(e);
@@ -461,16 +563,27 @@
       return h + emptyState("لا يوجد موظفون بعد", "أضف أول موظف من تبويب «الموظفون» وحدّد تاريخ أول يوم دوام له.");
     }
 
-    h += sectionTitle("في الدوام اليوم", onDuty.length + " موظف");
-    h += onDuty.length ? onDuty.map(function(e){ return dutyCard(e, d, false); }).join("")
-       : emptyState("لا أحد في الدوام هذا اليوم", "حسب دورية ١ دوام / ٣ استراحة.");
+    var hasShift = state.employees.some(function(e){ return !isDayWorker(e); });
+    var hasDay = state.employees.some(isDayWorker);
 
-    if(ending.length){
-      h += sectionTitle("بصمة نهاية وجبة الأمس", "بصمة صباح اليوم التالي");
-      h += ending.map(function(e){ return dutyCard(e, addDays(d,-1), true); }).join("");
+    if(hasShift){
+      h += sectionTitle("المناوبون في الدوام اليوم", onDuty.length + " موظف");
+      h += onDuty.length ? onDuty.map(function(e){ return dutyCard(e, d, false); }).join("")
+         : emptyState("لا مناوب في الدوام هذا اليوم", "حسب دورية ١ دوام / ٣ استراحة.");
+
+      if(ending.length){
+        h += sectionTitle("بصمة نهاية وجبة الأمس", "بصمة صباح اليوم التالي");
+        h += ending.map(function(e){ return dutyCard(e, addDays(d,-1), true); }).join("");
+      }
     }
 
-    h += sectionTitle("في الاستراحة", resting.length + " موظف");
+    if(hasDay){
+      h += sectionTitle("الدوام الصباحي اليوم", morning.length + " موظف");
+      h += morning.length ? morning.map(function(e){ return morningCard(e, d); }).join("")
+         : emptyState("لا دوام صباحي اليوم", "اليوم خارج أيام الدوام الرسمية.");
+    }
+
+    h += sectionTitle("في الاستراحة أو العطلة", resting.length + " موظف");
     h += resting.length ? resting.map(function(e){ return restCard(e, d); }).join("")
        : '<div class="soft" style="padding:12px;color:var(--muted);font-size:13px;margin-bottom:12px">لا يوجد موظف في الاستراحة اليوم.</div>';
     return h;
@@ -527,6 +640,75 @@
       '</article>';
   }
 
+  function morningCard(emp, d){
+    var rec = getRec(emp.id, d);
+    var s = dayStats(emp, rec);
+    var t = rec ? rec.t : [null,null,null,null];
+
+    function field(i, name, hint){
+      return '<div class="soft" style="padding:9px;display:flex;flex-direction:column;gap:6px">'+
+        '<div style="font-size:12px;font-weight:600">'+ esc(name) +
+        (hint ? ' <span style="font-size:11px;color:var(--muted);font-weight:400">'+ esc(hint) +'</span>' : '') +'</div>'+
+        '<div style="display:flex;gap:6px;align-items:center">'+
+          '<input type="time" id="m_'+ emp.id +'_'+ d +'_'+ i +'" value="'+ (t[i]||"") +'" data-act="settime" data-emp="'+ emp.id +'" data-date="'+ d +'" data-slot="'+ i +'" data-type="day" style="flex:1">'+
+          '<button class="btn btn-sm" data-act="now" data-emp="'+ emp.id +'" data-date="'+ d +'" data-slot="'+ i +'" data-type="day">الآن</button>'+
+        '</div></div>';
+    }
+
+    var main = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">'+
+      field(0, "بصمة الدخول", "الرسمي "+ empIn(emp)) +
+      field(1, "بصمة الخروج", "الرسمي "+ empOut(emp)) +'</div>';
+
+    // كتلة العودة بعد الدوام تظهر بعد تسجيل الخروج، أو إن كانت مستخدمة أصلاً
+    var extra = "";
+    var extraOn = !!(t[2] || t[3] || (rec && rec.extra));
+    if(extraOn){
+      extra = '<div style="margin-top:10px">'+
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'+
+          '<div style="font-size:12px;font-weight:600;color:var(--warn)">عودة بعد الدوام</div>'+
+          '<button class="btn btn-sm btn-danger" data-act="del-extra" data-emp="'+ emp.id +'" data-date="'+ d +'">إلغاء</button>'+
+        '</div>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">'+
+          field(2, "دخول العودة", "") +
+          field(3, "خروج العودة", "قد يكون صباح "+ dayName(addDays(d,1))) +
+        '</div></div>';
+    } else if(t[1]){
+      extra = '<div style="margin-top:10px"><button class="btn btn-sm" data-act="add-extra" data-emp="'+ emp.id +'" data-date="'+ d +'">تسجيل عودة بعد الدوام</button></div>';
+    }
+
+    var pills = "";
+    if(s.complete){
+      pills += '<span class="pill pill-duty">أساسي <span class="num">'+ fmtH(s.base) +'</span></span>';
+      if(s.ot > 0) pills += '<span class="pill pill-ot">إضافي <span class="num">'+ fmtH(s.ot) +'</span></span>';
+      if(s.otNext > 0) pills += '<span class="pill pill-ot">مبيت · <span class="num">'+ fmtH(s.otNext) +'</span> غداً</span>';
+      if(s.late > 0) pills += '<span class="pill pill-ot">تأخير <span class="num">'+ fmtH(s.late) +'</span></span>';
+      if(s.short > 0) pills += '<span class="pill pill-ot">نقص <span class="num">'+ fmtH(s.short) +'</span></span>';
+      if(!s.ot && !s.late && !s.short) pills += '<span class="pill pill-duty">مكتمل</span>';
+    } else if(s.started) pills = '<span class="pill pill-duty">في الدوام الآن</span>';
+    else pills = '<span class="pill pill-rest">بانتظار البصمة</span>';
+    if(s.extraOpen) pills += '<span class="pill pill-ot">العودة بلا بصمة خروج</span>';
+
+    var nextEmpty = -1;
+    if(!t[0]) nextEmpty = 0;
+    else if(!t[1]) nextEmpty = 1;
+    else if(extraOn && !t[2]) nextEmpty = 2;
+    else if(extraOn && !t[3]) nextEmpty = 3;
+    var names = ["الدخول","الخروج","دخول العودة","خروج العودة"];
+    var quick = nextEmpty >= 0
+      ? '<button class="btn btn-primary" data-act="now" data-emp="'+ emp.id +'" data-date="'+ d +'" data-slot="'+ nextEmpty +'" data-type="day">بصمة سريعة · '+ names[nextEmpty] +'</button>'
+      : '<span class="pill pill-duty">اكتملت بصمات اليوم</span>';
+
+    return '<article class="card" style="padding:14px;margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">'+
+        '<div><div class="display" style="font-size:16px">'+ esc(emp.name) +'</div>'+
+        '<div style="font-size:12px;color:var(--muted)">'+ esc(emp.dept||"—") +' · دوام صباحي '+ esc(empIn(emp)) +' – '+ esc(empOut(emp)) +'</div></div>'+
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+ pills +'</div>'+
+      '</div>'+
+      '<div style="margin:12px 0">'+ quick +'</div>'+
+      main + extra +
+      '</article>';
+  }
+
   function restCard(emp, d){
     var rec = getRec(emp.id, d);
     var r = restStats(rec);
@@ -548,8 +730,8 @@
     return '<article class="card" style="padding:12px 14px;margin-bottom:10px">'+
       '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">'+
         '<div><div style="font-weight:600">'+ esc(emp.name) +'</div>'+
-        '<div style="font-size:12px;color:var(--muted)">'+ esc(emp.dept||"—") +' · استراحة</div></div>'+
-        (open ? "" : '<button class="btn btn-sm" data-act="add-rest" data-emp="'+emp.id+'" data-date="'+d+'">تسجيل دوام في يوم استراحة</button>')+
+        '<div style="font-size:12px;color:var(--muted)">'+ esc(emp.dept||"—") +' · '+ (isDayWorker(emp) ? "عطلة" : "استراحة") +'</div></div>'+
+        (open ? "" : '<button class="btn btn-sm" data-act="add-rest" data-emp="'+emp.id+'" data-date="'+d+'">تسجيل دوام في يوم '+ (isDayWorker(emp) ? "عطلة" : "استراحة") +'</button>')+
       '</div>'+ body +'</article>';
   }
 
@@ -562,32 +744,63 @@
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">'+
         '<div><label class="label" for="f_name">اسم الموظف</label><input id="f_name" value="'+ esc(ed?ed.name:"") +'" placeholder="الاسم الثلاثي"></div>'+
         '<div><label class="label" for="f_dept">القسم / الشعبة</label><input id="f_dept" value="'+ esc(ed?ed.dept:"") +'" placeholder="مثال: شعبة الصيانة"></div>'+
-        '<div><label class="label" for="f_start">تاريخ أول يوم دوام</label><input id="f_start" type="date" value="'+ esc(ed?ed.startDate:todayStr()) +'"></div>'+
+        '<div><label class="label" for="f_type">نوع الدوام</label><select id="f_type" data-act="f_type">'+
+          '<option value="shift"'+ (ed && isDayWorker(ed) ? "" : " selected") +'>مناوب · ٢٤ ساعة ثم ٣ أيام استراحة</option>'+
+          '<option value="day"'+ (ed && isDayWorker(ed) ? " selected" : "") +'>صباحي اعتيادي</option>'+
+        '</select></div>'+
       '</div>'+
-      '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">'+
+
+      '<div id="f_shiftbox" style="margin-top:10px"'+ (ed && isDayWorker(ed) ? " hidden" : "") +'>'+
+        '<div style="max-width:240px"><label class="label" for="f_start">تاريخ أول يوم دوام</label>'+
+        '<input id="f_start" type="date" value="'+ esc(ed && ed.startDate ? ed.startDate : todayStr()) +'"></div>'+
+        '<p style="font-size:12px;color:var(--muted);margin:8px 0 0">من هذا التاريخ يبني البرنامج الدورية تلقائياً: يوم دوام ٢٤ ساعة يتبعه ٣ أيام استراحة.</p>'+
+      '</div>'+
+
+      '<div id="f_daybox" style="margin-top:10px"'+ (ed && isDayWorker(ed) ? "" : " hidden") +'>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'+
+          '<div><label class="label" for="f_in">بداية الدوام</label><input id="f_in" type="time" value="'+ esc(ed ? empIn(ed) : DEF_IN) +'"></div>'+
+          '<div><label class="label" for="f_out">نهاية الدوام</label><input id="f_out" type="time" value="'+ esc(ed ? empOut(ed) : DEF_OUT) +'"></div>'+
+          '<div><label class="label" for="f_grace">سماح الخروج المبكر (دقيقة)</label><input id="f_grace" type="number" min="0" max="120" value="'+ (ed ? empGrace(ed) : DEF_GRACE) +'"></div>'+
+        '</div>'+
+        '<div style="margin-top:10px"><span class="label">أيام الدوام الرسمية</span>'+
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">'+
+          DAYS_AR.map(function(n, i){
+            var on = ed ? empDays(ed).indexOf(i) >= 0 : DEF_DAYS.indexOf(i) >= 0;
+            return '<label class="btn btn-sm" style="gap:6px;cursor:pointer'+ (on ? ';border-color:var(--accent);color:var(--accent)' : '') +'">'+
+              '<input type="checkbox" class="f_wd" value="'+ i +'"'+ (on ? " checked" : "") +' style="width:auto;margin:0">'+ esc(n) +'</label>';
+          }).join("") +
+        '</div></div>'+
+        '<p style="font-size:12px;color:var(--muted);margin:10px 0 0">البقاء بعد نهاية الدوام يُحتسب إضافياً، وكذلك أي دوام في أيام العطلة. والعودة بعد الدوام تُسجَّل ببصمتين إضافيتين، وإن بات حتى الصباح قُسِمت ساعاته عند منتصف الليل.</p>'+
+      '</div>'+
+
+      '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">'+
         '<button class="btn btn-primary" data-act="save-emp">'+ (ed?"حفظ التعديل":"إضافة الموظف") +'</button>'+
         (ed ? '<button class="btn" data-act="cancel-edit">إلغاء</button>' : '')+
       '</div>'+
-      '<p style="font-size:12px;color:var(--muted);margin:10px 0 0">من تاريخ أول يوم دوام يبني البرنامج الدورية تلقائياً: يوم دوام ٢٤ ساعة يتبعه ٣ أيام استراحة.</p>'+
       '</section>';
 
     if(!state.employees.length) return h + emptyState("القائمة فارغة", "أضف موظفاً لتبدأ الجدولة.");
 
     h += '<section class="card" style="padding:0;overflow:hidden"><div class="scroll-x"><table><thead><tr>'+
-      '<th>الموظف</th><th>القسم</th><th>أول يوم دوام</th><th>حالة اليوم</th><th>الدوام القادم</th><th class="no-print">إجراءات</th>'+
+      '<th>الموظف</th><th>القسم</th><th>النوع</th><th>الجدولة</th><th>حالة اليوم</th><th>الدوام القادم</th><th class="no-print">إجراءات</th>'+
       '</tr></thead><tbody>';
     state.employees.forEach(function(e){
+      var dayW = isDayWorker(e);
       var duty = isDutyDay(e, ui.day);
       var next = ui.day;
-      for(var i=0;i<4;i++){ if(isDutyDay(e, next)) break; next = addDays(next,1); }
+      for(var i=0;i<8;i++){ if(isDutyDay(e, next)) break; next = addDays(next,1); }
       var del = ui.confirmDel === e.id
         ? '<button class="btn btn-sm btn-danger" data-act="del-emp-yes" data-id="'+e.id+'">تأكيد الحذف</button> <button class="btn btn-sm" data-act="del-emp-no">تراجع</button>'
         : '<button class="btn btn-sm" data-act="edit-emp" data-id="'+e.id+'">تعديل</button> <button class="btn btn-sm btn-danger" data-act="del-emp" data-id="'+e.id+'">حذف</button>';
       h += '<tr><td style="text-align:right;font-weight:600">'+ esc(e.name) +'</td>'+
         '<td>'+ esc(e.dept||"—") +'</td>'+
-        '<td><span class="num">'+ esc(e.startDate) +'</span></td>'+
-        '<td>'+ (duty ? '<span class="pill pill-duty">دوام</span>' : '<span class="pill pill-rest">استراحة</span>') +'</td>'+
-        '<td><span class="num">'+ esc(next) +'</span> · '+ dayName(next) +'</td>'+
+        '<td>'+ (dayW ? '<span class="pill pill-ot">صباحي</span>' : '<span class="pill pill-duty">مناوب</span>') +'</td>'+
+        '<td style="font-size:12px">'+ (dayW
+            ? esc(daysLabel(e)) +' · <span class="tnum">'+ esc(empIn(e)) +' – '+ esc(empOut(e)) +'</span>'
+            : 'من <span class="tnum">'+ esc(e.startDate||"—") +'</span>') +'</td>'+
+        '<td>'+ (duty ? '<span class="pill pill-duty">دوام</span>'
+                      : '<span class="pill pill-rest">'+ (dayW ? "عطلة" : "استراحة") +'</span>') +'</td>'+
+        '<td style="font-size:12px"><span class="tnum">'+ esc(next) +'</span> · '+ dayName(next) +'</td>'+
         '<td class="no-print" style="white-space:nowrap">'+ del +'</td></tr>';
     });
     h += '</tbody></table></div></section>';
@@ -653,7 +866,7 @@
       }
       cells += '<div class="'+ cls +'"><div style="display:flex;justify-content:space-between;align-items:center">'+
         '<span class="num" style="font-weight:700">'+ d +'</span>'+
-        '<span style="font-size:10px;color:var(--muted)">'+ (duty?"دوام":"استراحة") +'</span></div>'+ info +'</div>';
+        '<span style="font-size:10px;color:var(--muted)">'+ (duty ? "دوام" : (isDayWorker(emp) ? "عطلة" : "استراحة")) +'</span></div>'+ info +'</div>';
     }
     var head = DAYS_AR.map(function(n){ return '<div style="text-align:center;font-size:12px;color:var(--muted);font-weight:600;padding-bottom:4px">'+ n +'</div>'; }).join("");
     return '<section class="card" style="padding:14px">'+
@@ -706,7 +919,8 @@
     var rows = R.rows.map(function(r){
       var t = r.rec ? r.rec.t : [null,null,null,null];
       var typeCell = r.carry === "in" ? '<span class="pill pill-ot">ترحيل</span>'
-                   : (r.duty ? '<span class="pill pill-duty">دوام</span>' : '<span class="pill pill-ot">استراحة</span>');
+                   : (r.duty ? '<span class="pill pill-duty">دوام</span>'
+                             : '<span class="pill pill-ot">'+ (isDayWorker(R.emp) ? "عطلة" : "استراحة") +'</span>');
       var dateCell = r.carry === "in"
         ? '<span class="num">'+ parseD(r.date).getDate() +'</span> <span style="font-size:11px;color:var(--muted)">'+ MONTHS_AR[parseD(r.date).getMonth()] +'</span>'
         : '<span class="num">'+ parseD(r.date).getDate() +'</span>';
@@ -769,7 +983,10 @@
       '<col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:10%">'+
       '<col style="width:8%"><col style="width:8%"><col style="width:21%"></colgroup>'+
       '<thead><tr>'+
-        '<th>التاريخ</th><th>اليوم</th><th>النوع</th><th>صباحية</th><th>وسطية</th><th>ليلية</th><th>صباح التالي</th><th>أساسي</th><th>إضافي</th><th>ملاحظات</th>'+
+        '<th>التاريخ</th><th>اليوم</th><th>النوع</th>'+ (isDayWorker(R.emp)
+          ? '<th>دخول</th><th>خروج</th><th>دخول العودة</th><th>خروج العودة</th>'
+          : '<th>صباحية</th><th>وسطية</th><th>ليلية</th><th>صباح التالي</th>') +
+        '<th>أساسي</th><th>إضافي</th><th>ملاحظات</th>'+
       '</tr></thead><tbody>'+ (rows || '<tr><td colspan="10" style="color:var(--muted)">لا توجد أيام مسجلة في هذا الشهر.</td></tr>') +'</tbody>'+
       '<tfoot><tr style="font-weight:700;background:var(--surface-2)"><td colspan="7" style="text-align:left">المجموع</td>'+
         '<td class="tnum">'+ fmtH(R.base) +'</td><td class="tnum" style="color:var(--warn)">'+ fmtH(R.ot) +'</td><td class="tnum">'+ fmtH(R.total) +'</td></tr></tfoot>'+
@@ -803,22 +1020,52 @@
       state.demo = false; save(); render(); return;
     }
     if(a === "add-rest"){ ensureRec(el.dataset.emp, el.dataset.date, "rest"); save(); render(); return; }
+    if(a === "add-extra"){
+      var re = ensureRec(el.dataset.emp, el.dataset.date, "day");
+      re.extra = true; save(); render(); return;
+    }
+    if(a === "del-extra"){
+      var rx = getRec(el.dataset.emp, el.dataset.date);
+      if(rx){ rx.t[2] = null; rx.t[3] = null; rx.extra = false; }
+      save(); render(); return;
+    }
     if(a === "del-rest"){ delete state.records[rkey(el.dataset.emp, el.dataset.date)]; save(); render(); return; }
 
     if(a === "save-emp"){
       var name = (document.getElementById("f_name").value||"").trim();
       var dept = (document.getElementById("f_dept").value||"").trim();
-      var start = document.getElementById("f_start").value;
-      if(!name || !start){ flash("أدخل اسم الموظف وتاريخ أول يوم دوام."); return; }
+      var type = document.getElementById("f_type").value;
+      if(!name){ flash("أدخل اسم الموظف."); return; }
+
+      var data = { name:name, dept:dept, type:type };
+      if(type === "day"){
+        var tin = document.getElementById("f_in").value || DEF_IN;
+        var tout = document.getElementById("f_out").value || DEF_OUT;
+        if(mins(tout) <= mins(tin)){ flash("نهاية الدوام يجب أن تكون بعد بدايته."); return; }
+        var wd = [];
+        document.querySelectorAll(".f_wd").forEach(function(c){ if(c.checked) wd.push(Number(c.value)); });
+        if(!wd.length){ flash("اختر يوم دوام رسمي واحداً على الأقل."); return; }
+        data.startTime = tin; data.endTime = tout; data.workDays = wd;
+        data.grace = Math.max(0, Number(document.getElementById("f_grace").value) || 0);
+        data.startDate = null;
+      } else {
+        var start = document.getElementById("f_start").value;
+        if(!start){ flash("أدخل تاريخ أول يوم دوام."); return; }
+        data.startDate = start;
+        data.startTime = null; data.endTime = null; data.workDays = null; data.grace = null;
+      }
+
       if(ui.editing){
         var e = getEmp(ui.editing.id);
-        e.name = name; e.dept = dept; e.startDate = start; ui.editing = null;
+        for(var k in data) e[k] = data[k];
+        ui.editing = null;
       } else {
-        state.employees.push({ id:"e"+Date.now().toString(36), name:name, dept:dept, startDate:start });
+        data.id = "e"+Date.now().toString(36);
+        state.employees.push(data);
       }
       state.demo = false; save(); render(); return;
     }
-    if(a === "edit-emp"){ var emp = getEmp(el.dataset.id); ui.editing = { id:emp.id, name:emp.name, dept:emp.dept, startDate:emp.startDate }; render(); window.scrollTo({top:0,behavior:"smooth"}); return; }
+    if(a === "edit-emp"){ ui.editing = getEmp(el.dataset.id); render(); window.scrollTo({top:0,behavior:"smooth"}); return; }
     if(a === "cancel-edit"){ ui.editing = null; render(); return; }
     if(a === "del-emp"){ ui.confirmDel = el.dataset.id; render(); return; }
     if(a === "del-emp-no"){ ui.confirmDel = null; render(); return; }
@@ -859,6 +1106,13 @@
       rec.t[Number(el.dataset.slot)] = el.value || null;
       dropIfEmpty(el.dataset.emp, el.dataset.date);
       state.demo = false; save(); render(); return;
+    }
+    if(a === "f_type"){
+      var isDay = el.value === "day";
+      var sb = document.getElementById("f_shiftbox"), db = document.getElementById("f_daybox");
+      if(sb) sb.hidden = isDay;
+      if(db) db.hidden = !isDay;
+      return;
     }
     if(a === "cal_emp"){ ui.calEmp = el.value; render(); return; }
     if(a === "cal-month"){ ui.calMonth = el.value || ui.calMonth; render(); return; }
@@ -902,6 +1156,21 @@
     document.body.appendChild(d);
     setTimeout(function(){ d.remove(); }, 2600);
   }
+
+  /* ============ تثبيت التخزين ============
+     يطلب من المتصفح استثناء بيانات التطبيق من المسح التلقائي
+     عند ضيق المساحة أو طول عدم الاستخدام. */
+  (function persistStorage(){
+    try{
+      if(!navigator.storage || typeof navigator.storage.persist !== "function") return;
+      navigator.storage.persisted().then(function(already){
+        if(already) return true;
+        return navigator.storage.persist();
+      }).then(function(granted){
+        try{ localStorage.setItem("storage_persisted", granted ? "1" : "0"); }catch(e){}
+      }).catch(function(){});
+    }catch(e){}
+  })();
 
   /* ============ الإقلاع ============ */
   if(!load()) seedDemo();
