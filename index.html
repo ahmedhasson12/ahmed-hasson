@@ -152,6 +152,10 @@
   .cal-today{outline:2px solid var(--accent);outline-offset:1px}
   .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
   .sig-line{border-top:1px dashed var(--muted);padding-top:6px;font-size:12px;color:var(--muted);text-align:center}
+  /* شعار الشركة في الشريط العلوي — على أرضية بيضاء ليظهر في الوضعين */
+  .brand-mark{width:42px;height:42px;flex:0 0 auto;border-radius:11px;background-color:#fff;
+    border:1px solid var(--line);background-image:var(--logo);background-size:78%;
+    background-position:center;background-repeat:no-repeat}
   .sheet-logo{width:54px;height:54px;flex:0 0 auto;background-image:var(--logo);background-size:contain;background-position:center;background-repeat:no-repeat}
   @media print{ .sheet-logo{width:46px;height:46px} }
   .paper{background:var(--surface);border:1px solid var(--line);border-radius:14px}
@@ -186,7 +190,7 @@
     <div class="wrap" style="padding-block:12px">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between">
         <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:38px;height:38px;border-radius:11px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-weight:700;font-family:Cairo,sans-serif">٢٤</div>
+          <div class="brand-mark" title="شعار الشركة"></div>
           <div>
             <h1 style="font-size:18px;margin:0;line-height:1.3">سجل المناوبات</h1>
             <div style="font-size:12px;color:var(--muted)">٢٤ ساعة دوام ثم ٣ أيام استراحة</div>
