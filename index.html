@@ -968,7 +968,6 @@
       '<div style="flex:1;min-width:150px"><label class="label" for="sheet_month">الشهر</label><input id="sheet_month" type="month" value="'+ ui.sheetMonth +'" data-act="sheet-month"></div>'+
       '<button class="btn btn-primary" data-act="pdf">مشاركة PDF</button>'+
       '<button class="btn" data-act="print">طباعة</button>'+
-      '<button class="btn" data-act="share">ملخّص نصّي</button>'+
       '</section>';
     if(!ui.sheetEmp || !getEmp(ui.sheetEmp)) return h + emptyState("اختر موظفاً وشهراً", "ليظهر التايم شيت جاهزاً للطباعة.");
 
@@ -1175,7 +1174,6 @@
     if(a === "clear-demo"){ state = { employees:[], records:{}, demo:false }; ui.sheetEmp=""; ui.calEmp="all"; save(); render(); return; }
     if(a === "print"){ doPrint(); return; }
     if(a === "pdf"){ sharePdf(); return; }
-    if(a === "share"){ shareSheet(); return; }
     if(a === "open-safari"){ closeModal(); window.open(location.href, "_blank"); return; }
 
     if(a === "backup"){
@@ -1551,58 +1549,11 @@
         '<div style="display:grid;gap:8px">'+
           '<button class="btn btn-primary" data-act="pdf">مشاركة الكشف PDF مباشرة</button>'+
           '<button class="btn" data-act="open-safari">فتح الكشف في Safari</button>'+
-          '<button class="btn" data-act="share">مشاركة ملخّص نصّي بدل ذلك</button>'+
           '<button class="btn btn-ghost" data-act="modal-close">إغلاق</button>'+
         '</div>');
       return;
     }
     window.print();
-  }
-
-  // ملخّص نصّي للكشف — بديل مضمون يعمل بلا إنترنت وبلا أي مكوّن خارجي
-  function buildSheetText(){
-    var R = monthReport(ui.sheetEmp, ui.sheetMonth);
-    var y = Number(R.ym.split("-")[0]), m = Number(R.ym.split("-")[1]) - 1;
-    var L = [];
-    L.push("كشف الساعات الشهري");
-    L.push("الموظف: "+ R.emp.name + (R.emp.dept ? " — "+ R.emp.dept : ""));
-    L.push("الشهر: "+ MONTHS_AR[m] +" "+ y);
-    L.push("");
-    L.push("أيام الدوام الفعلي: "+ R.worked +" من "+ R.scheduled);
-    L.push("الساعات الأساسية: "+ fmtH(R.base));
-    L.push("الساعات الإضافية: "+ fmtH(R.ot));
-    L.push("مجموع الساعات: "+ fmtH(R.total));
-    L.push("");
-    L.push("الإضافي حسب الأسابيع:");
-    R.weeks.forEach(function(w){ L.push("• "+ w.label +" ("+ w.from +"–"+ w.to +"): "+ fmtH(w.ot)); });
-    var worked = R.rows.filter(function(r){ return r.base || r.ot; });
-    if(worked.length){
-      L.push("");
-      L.push("الأيام المحتسبة:");
-      worked.forEach(function(r){
-        var d = parseD(r.date);
-        L.push("• "+ d.getDate() +" "+ MONTHS_AR[d.getMonth()] +" ("+ dayName(r.date) +") — أساسي "+
-               fmtH(r.base) +" · إضافي "+ fmtH(r.ot) + (r.note ? " · "+ r.note : ""));
-      });
-    }
-    return L.join("\n");
-  }
-
-  function shareText(){
-    var txt = buildSheetText();
-    if(navigator.share){
-      navigator.share({ title:"كشف الساعات", text:txt }).catch(function(){});
-    } else {
-      var b = document.querySelector('[data-act="share"]');
-      copyText(txt, b || document.body);
-      flash("نُسخ الكشف نصاً — الصقه في واتساب.");
-    }
-  }
-
-  function shareSheet(){
-    closeModal();
-    if(!ui.sheetEmp || !getEmp(ui.sheetEmp)){ flash("اختر موظفاً وشهراً أولاً."); return; }
-    shareText();
   }
 
   function copyText(txt, btn){
