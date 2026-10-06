@@ -406,6 +406,46 @@
     return out;
   }
 
+  /* أقل فاصل زمني مقبول بين بصمتين متتاليتين، بالدقائق.
+     يمنع تسجيل البصمات كلها دفعة واحدة. المشرف وحده يتجاوزه. */
+  var MIN_GAP = 3 * 60;        // وجبة المناوب: البصمات متباعدة ٧–٩ ساعات طبيعياً
+  var MIN_GAP_DAY = 30;        // الدوام الصباحي: بين الدخول والخروج
+
+  function gapProblem(rec, slot, hm, type){
+    if(!rec || slot === 0) return null;
+    var gap = (type === "duty") ? MIN_GAP : MIN_GAP_DAY;
+    var now = mins(hm);
+    for(var i = slot - 1; i >= 0; i--){
+      var prev = mins(rec.t[i]);
+      if(prev === null) continue;
+      var diff = now - prev;
+      if(diff < 0) diff += 24*60;              // عبَر منتصف الليل
+      if(diff < gap){
+        return "لم يمضِ إلا "+ fmtH(diff) +" على البصمة السابقة ("+ rec.t[i] +")، "+
+               "والمطلوب "+ fmtH(gap) +" على الأقل قبل البصمة التالية.";
+      }
+      break;
+    }
+    return null;
+  }
+
+  // سجل مشبوه: بصمتان متتاليتان بينهما أقل من الحد الأدنى
+  function tooClose(rec, type){
+    if(!rec) return false;
+    var gap = (type === "duty" || !type) ? MIN_GAP : MIN_GAP_DAY;
+    var prev = null;
+    for(var i=0;i<4;i++){
+      var v = mins(rec.t[i]);
+      if(v === null) continue;
+      if(prev !== null){
+        var d = v - prev; if(d < 0) d += 24*60;
+        if(d < gap) return true;
+      }
+      prev = v;
+    }
+    return false;
+  }
+
   function getEmp(id){ for(var i=0;i<state.employees.length;i++){ if(state.employees[i].id===id) return state.employees[i]; } return null; }
 
   // الساعات الإضافية المحتسبة على تاريخ تقويمي معيّن:
@@ -512,6 +552,7 @@
           else row.note = "مكتملة";
         } else if(s.started){ row.note = "وجبة غير مكتملة"; openShifts++; }
         else row.note = rec ? "بصمات ناقصة" : "بدون بصمات";
+        if(tooClose(rec, "duty")){ row.note += " · بصمات متقاربة — راجعها"; row.flag = true; }
         rows.push(row);
       } else if(!duty && rec && inMonth(ds)){
         var r = restStats(rec);
@@ -986,7 +1027,7 @@
       var dateCell = r.carry === "in"
         ? '<span class="num">'+ parseD(r.date).getDate() +'</span> <span style="font-size:11px;color:var(--muted)">'+ MONTHS_AR[parseD(r.date).getMonth()] +'</span>'
         : '<span class="num">'+ parseD(r.date).getDate() +'</span>';
-      return '<tr'+ (r.carry ? ' style="background:var(--warn-soft)"' : '') +'><td>'+ dateCell +'</td>'+
+      return '<tr'+ ((r.carry || r.flag) ? ' style="background:var(--warn-soft)"' : '') +'><td>'+ dateCell +'</td>'+
         '<td>'+ dayName(r.date) +'</td>'+
         '<td>'+ typeCell +'</td>'+
 
@@ -1113,8 +1154,19 @@
     }
     if(a === "now"){
       var type = el.dataset.type;
+      var slot = Number(el.dataset.slot);
       var rec = ensureRec(el.dataset.emp, el.dataset.date, type);
-      rec.t[Number(el.dataset.slot)] = nowHM();
+      var bad = gapProblem(rec, slot, nowHM(), type);
+      if(bad && !ui.unlocked){
+        dropIfEmpty(el.dataset.emp, el.dataset.date);
+        openModal('<h2 style="font-size:16px;margin:0 0 8px">بصمة مبكّرة جداً</h2>'+
+          '<p style="font-size:13px;color:var(--muted);margin:0 0 12px;line-height:1.9">'+ esc(bad) +'</p>'+
+          '<p style="font-size:13px;color:var(--muted);margin:0 0 12px;line-height:1.9">'+
+          'إن كان التسجيل صحيحاً فعلاً، يستطيع المشرف إدخاله بعد فتح القفل.</p>'+
+          '<div style="display:flex;gap:8px"><button class="btn" data-act="modal-close">حسناً</button></div>');
+        return;
+      }
+      rec.t[slot] = nowHM();
       state.demo = false; save(); render(); return;
     }
     if(a === "add-rest"){ ensureRec(el.dataset.emp, el.dataset.date, "rest"); save(); render(); return; }
@@ -1360,7 +1412,7 @@
 
     rows.forEach(function(r){
       var t = r.rec ? r.rec.t : [null,null,null,null];
-      if(r.carry) { ctx.fillStyle = C_WSOFT; ctx.fillRect(L0, cy, W, ROW_H); }
+      if(r.carry || r.flag) { ctx.fillStyle = C_WSOFT; ctx.fillRect(L0, cy, W, ROW_H); }
       hline(ctx, L0, R0, cy + ROW_H, C_LINE, 1);
       var d = parseD(r.date);
       var typ = r.carry === "in" ? "ترحيل" : (r.duty ? "دوام" : (dayW ? "عطلة" : "استراحة"));
