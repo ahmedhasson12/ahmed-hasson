@@ -250,7 +250,7 @@
   var KEY = "shift_attendance_v1";
   var DEF_RATES = { shift:4000, after:4000, holiday:5000 };   // دينار عراقي للساعة
   var state = { employees:[], records:{}, demo:false, rates:null, holidays:{},
-                tombs:{}, sync:null, settingsU:0 };
+                tombs:{}, sync:null, settingsU:0, device:null };
   var ui = { tab:"today", day:todayStr(), calMonth:monthStr(new Date()), calEmp:"all",
              sheetEmp:"", sheetMonth:monthStr(new Date()), editing:null, confirmDel:null,
              unlocked:false };
@@ -261,7 +261,7 @@
   var ADMIN_ACTS = { "settime":1, "save-emp":1, "edit-emp":1, "cancel-edit":1,
                      "del-emp":1, "del-emp-yes":1, "del-emp-no":1, "clear-demo":1,
                      "restore-open":1, "restore-apply":1, "del-rest":1, "del-extra":1,
-                     "save-rates":1,
+                     "save-rates":1, "bind-admin":1, "unbind":1,
                      "set-pin":1 };
   var AUTO_LOCK_MS = 5 * 60 * 1000, lockTimer = null;
 
@@ -302,11 +302,24 @@
       if(raw){ var d = JSON.parse(raw); if(d && d.employees){
         state = { employees:d.employees||[], records:d.records||{}, demo:!!d.demo,
                   rates:d.rates || null, holidays:d.holidays || {},
-                  tombs:d.tombs || {}, sync:d.sync || null, settingsU:d.settingsU || 0 };
+                  tombs:d.tombs || {}, sync:d.sync || null, settingsU:d.settingsU || 0,
+                  device:d.device || null };
+        stampLegacy();
         return true; } }
     }catch(e){}
     return false;
   }
+  // البيانات المسجّلة قبل المزامنة بلا ختم زمني — نمنحها ختماً لترتفع في أول دفع
+  function stampLegacy(){
+    var t = Date.now(), n = 0;
+    Object.keys(state.records).forEach(function(k){
+      var r = state.records[k];
+      if(r && !r.u){ r.u = t; n++; }
+    });
+    state.employees.forEach(function(e){ if(e && !e.u){ e.u = t; n++; } });
+    if(n) try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){}
+  }
+
   function save(){
     try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){}
   }
@@ -430,10 +443,12 @@
   function syncPull(){
     var m = syncMeta(), since = encodeURIComponent(m.pulledAt);
     var q = "ws=eq." + encodeURIComponent(SYNC_WS) + "&updated_at=gt." + since;
+    var mine = (deviceRole() && deviceRole() !== "admin")
+      ? "&emp_id=eq." + encodeURIComponent(deviceRole()) : "";
     var newest = m.pulledAt;
     function note(row){ if(row.updated_at && row.updated_at > newest) newest = row.updated_at; }
 
-    return sFetch("records?" + q + "&order=updated_at.asc&limit=5000").then(function(rows){
+    return sFetch("records?" + q + mine + "&order=updated_at.asc&limit=5000").then(function(rows){
       (rows||[]).forEach(function(row){
         note(row);
         var k = row.emp_id + "|" + row.day;
@@ -443,7 +458,7 @@
         if(row.deleted){ delete state.records[k]; return; }
         state.records[k] = { type:row.type, t:row.t, extra:!!row.extra, u:row.u || Date.now() };
       });
-      return sFetch("employees?" + q + "&order=updated_at.asc&limit=2000");
+      return sFetch("employees?" + q + mine + "&order=updated_at.asc&limit=2000");
     }).then(function(rows){
       (rows||[]).forEach(function(row){
         note(row);
@@ -472,6 +487,7 @@
   function syncNow(silent){
     if(!syncOn()){ if(!silent) flash("المزامنة غير مفعّلة على هذه النسخة."); return Promise.resolve(); }
     // طلب أثناء مزامنة جارية لا يُهمل، بل يُعاد بعد انتهائها
+    if(!deviceRole()){ if(!silent) flash("حدّد صاحب الجهاز أولاً."); return Promise.resolve(); }
     if(syncBusy){ syncPending = true; return Promise.resolve(); }
     if(!navigator.onLine){ if(!silent) flash("لا اتصال بالإنترنت — ستُزامَن لاحقاً."); return Promise.resolve(); }
     syncBusy = true;
@@ -634,6 +650,17 @@
   }
 
   function getEmp(id){ for(var i=0;i<state.employees.length;i++){ if(state.employees[i].id===id) return state.employees[i]; } return null; }
+
+  /* ============ نطاق الجهاز ============
+     جهاز المشرف يرى الجميع، وجهاز الموظف يرى نفسه وحده. */
+  function deviceRole(){ return state.device || null; }
+  function isAdminDevice(){ return deviceRole() === "admin"; }
+  function needsBinding(){ return !deviceRole(); }
+  function scopedEmployees(){
+    var r = deviceRole();
+    if(!r || r === "admin") return state.employees;
+    return state.employees.filter(function(e){ return e.id === r; });
+  }
 
   // الساعات الإضافية المحتسبة على تاريخ تقويمي معيّن:
   // تأخير الخروج يقع فجر/نهار اليوم التالي لبداية الوجبة، فيُحسب على ذلك اليوم.
@@ -825,6 +852,7 @@
     document.querySelectorAll("#tabs .tab").forEach(function(b){
       b.setAttribute("aria-selected", b.dataset.tab === ui.tab ? "true" : "false");
     });
+    if(needsBinding()){ view.innerHTML = viewBinding(); applyLock(); return; }
     if(ui.tab === "today") view.innerHTML = viewToday();
     else if(ui.tab === "staff") view.innerHTML = viewStaff();
     else if(ui.tab === "calendar") view.innerHTML = viewCalendar();
@@ -844,7 +872,8 @@
   function viewToday(){
     var d = ui.day;
     var onDuty = [], ending = [], resting = [], morning = [];
-    state.employees.forEach(function(e){
+    var LIST = scopedEmployees();
+    LIST.forEach(function(e){
       if(isDayWorker(e)){
         if(isDutyDay(e, d)) morning.push(e); else resting.push(e);
         return;
@@ -866,12 +895,12 @@
           '<button class="btn btn-sm" data-act="day" data-v="1">اليوم التالي</button>'+
         '</div></div>'+ holidayBar(d) +'</section>';
 
-    if(!state.employees.length){
+    if(!LIST.length){
       return h + emptyState("لا يوجد موظفون بعد", "أضف أول موظف من تبويب «الموظفون» وحدّد تاريخ أول يوم دوام له.");
     }
 
-    var hasShift = state.employees.some(function(e){ return !isDayWorker(e); });
-    var hasDay = state.employees.some(isDayWorker);
+    var hasShift = LIST.some(function(e){ return !isDayWorker(e); });
+    var hasDay = LIST.some(isDayWorker);
 
     if(hasShift){
       h += sectionTitle("المناوبون في الدوام اليوم", onDuty.length + " موظف");
@@ -893,6 +922,117 @@
     h += sectionTitle("في الاستراحة أو العطلة", resting.length + " موظف");
     h += resting.length ? resting.map(function(e){ return restCard(e, d); }).join("")
        : '<div class="soft" style="padding:12px;color:var(--muted);font-size:13px;margin-bottom:12px">لا يوجد موظف في الاستراحة اليوم.</div>';
+    return h;
+  }
+
+  // قراءة حقول نموذج الموظف والتحقّق منها — ترجع null عند الرفض
+  function readEmpForm(){
+    var name = (document.getElementById("f_name").value||"").trim();
+    var dept = (document.getElementById("f_dept").value||"").trim();
+    var type = document.getElementById("f_type").value;
+    if(!name){ flash("أدخل اسم الموظف."); return null; }
+
+    var data = { name:name, dept:dept, type:type };
+    if(type === "day"){
+      var tin = document.getElementById("f_in").value || DEF_IN;
+      var tout = document.getElementById("f_out").value || DEF_OUT;
+      if(mins(tout) <= mins(tin)){ flash("نهاية الدوام يجب أن تكون بعد بدايته."); return null; }
+      var wd = [];
+      document.querySelectorAll(".f_wd").forEach(function(c){ if(c.checked) wd.push(Number(c.value)); });
+      if(!wd.length){ flash("اختر يوم دوام رسمي واحداً على الأقل."); return null; }
+      data.startTime = tin; data.endTime = tout; data.workDays = wd;
+      data.grace = Math.max(0, Number(document.getElementById("f_grace").value) || 0);
+      data.startDate = null;
+    } else {
+      var start = document.getElementById("f_start").value;
+      if(!start){ flash("أدخل تاريخ أول يوم دوام."); return null; }
+      data.startDate = start;
+      data.startTime = null; data.endTime = null; data.workDays = null; data.grace = null;
+    }
+    return data;
+  }
+
+  // حقول بيانات الموظف — يستعملها نموذج المشرف وتسجيل الموظف لنفسه
+  function empFormFields(ed){
+    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">'+
+        '<div><label class="label" for="f_name">اسم الموظف</label><input id="f_name" value="'+ esc(ed?ed.name:"") +'" placeholder="الاسم الثلاثي"></div>'+
+        '<div><label class="label" for="f_dept">القسم / الشعبة</label><input id="f_dept" value="'+ esc(ed?ed.dept:"") +'" placeholder="مثال: شعبة الصيانة"></div>'+
+        '<div><label class="label" for="f_type">نوع الدوام</label><select id="f_type" data-act="f_type">'+
+          '<option value="shift"'+ (ed && isDayWorker(ed) ? "" : " selected") +'>مناوب · ٢٤ ساعة ثم ٣ أيام استراحة</option>'+
+          '<option value="day"'+ (ed && isDayWorker(ed) ? " selected" : "") +'>صباحي اعتيادي</option>'+
+        '</select></div>'+
+      '</div>'+
+      '<div id="f_shiftbox" style="margin-top:10px"'+ (ed && isDayWorker(ed) ? " hidden" : "") +'>'+
+        '<div style="max-width:240px"><label class="label" for="f_start">تاريخ أول يوم دوام</label>'+
+        '<input id="f_start" type="date" value="'+ esc(ed && ed.startDate ? ed.startDate : todayStr()) +'"></div>'+
+        '<p style="font-size:12px;color:var(--muted);margin:8px 0 0">من هذا التاريخ يبني البرنامج الدورية تلقائياً: يوم دوام ٢٤ ساعة يتبعه ٣ أيام استراحة.</p>'+
+      '</div>'+
+      '<div id="f_daybox" style="margin-top:10px"'+ (ed && isDayWorker(ed) ? "" : " hidden") +'>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'+
+          '<div><label class="label" for="f_in">بداية الدوام</label><input id="f_in" type="time" value="'+ esc(ed ? empIn(ed) : DEF_IN) +'"></div>'+
+          '<div><label class="label" for="f_out">نهاية الدوام</label><input id="f_out" type="time" value="'+ esc(ed ? empOut(ed) : DEF_OUT) +'"></div>'+
+          '<div><label class="label" for="f_grace">سماح الخروج المبكر (دقيقة)</label><input id="f_grace" type="number" min="0" max="120" value="'+ (ed ? empGrace(ed) : DEF_GRACE) +'"></div>'+
+        '</div>'+
+        '<div style="margin-top:10px"><span class="label">أيام الدوام الرسمية</span>'+
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">'+
+          DAYS_AR.map(function(n, i){
+            var on = ed ? empDays(ed).indexOf(i) >= 0 : DEF_DAYS.indexOf(i) >= 0;
+            return '<label class="btn btn-sm" style="gap:6px;cursor:pointer'+ (on ? ';border-color:var(--accent);color:var(--accent)' : '') +'">'+
+              '<input type="checkbox" class="f_wd" value="'+ i +'"'+ (on ? " checked" : "") +' style="width:auto;margin:0">'+ esc(n) +'</label>';
+          }).join("") +
+        '</div></div>'+
+        '<p style="font-size:12px;color:var(--muted);margin:10px 0 0">البقاء بعد نهاية الدوام يُحتسب إضافياً، وكذلك أي دوام في أيام العطلة. والعودة بعد الدوام تُسجَّل ببصمتين إضافيتين، وإن بات حتى الصباح قُسِمت ساعاته عند منتصف الليل.</p>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">'+
+        '<button class="btn btn-primary" data-act="save-emp">'+ (ed?"حفظ التعديل":"إضافة الموظف") +'</button>'+
+      '';
+  }
+  /* ---------- ربط الجهاز بصاحبه ---------- */
+  function viewBinding(){
+    var known = state.employees.slice().sort(function(a,b){ return a.name.localeCompare(b.name,"ar"); });
+
+    var h = '<section class="card" style="padding:20px;margin-bottom:16px">'+
+      '<div class="display" style="font-size:18px;margin-bottom:6px">من يستخدم هذا الجهاز؟</div>'+
+      '<p style="font-size:13px;color:var(--muted);margin:0;line-height:1.9">'+
+      'يُسأل هذا السؤال مرة واحدة. بعدها يعرض التطبيق على هذا الجهاز سجلّ صاحبه وحده، '+
+      'ولا تظهر فيه أسماء بقية الموظفين ولا بصماتهم.</p></section>';
+
+    if(ui.selfReg){
+      h += '<section class="card" style="padding:16px;margin-bottom:16px">'+
+        '<h2 style="font-size:15px;margin:0 0 4px">تسجيل بياناتي</h2>'+
+        '<p style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.9">'+
+        'أدخل بياناتك مرة واحدة. ترتبط بهذا الجهاز وتصل إلى المشرف تلقائياً.</p>'+
+        empFormFields(null) +
+        '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">'+
+          '<button class="btn btn-primary" data-act="self-register">تسجيل وبدء الاستخدام</button>'+
+          '<button class="btn" data-act="self-reg-cancel">رجوع</button>'+
+        '</div></section>';
+      return h;
+    }
+
+    h += '<div style="display:grid;gap:8px;margin-bottom:18px">'+
+      '<button class="btn btn-primary" style="padding:14px" data-act="self-reg-open">أنا موظف — أسجّل بياناتي</button>'+
+      '</div>';
+
+    if(known.length){
+      h += '<h3 style="font-size:14px;margin:0 0 10px">أو اختر اسمك إن كنت مسجّلاً</h3>'+
+        '<div style="display:grid;gap:8px;margin-bottom:18px">'+
+          known.map(function(e){
+            return '<button class="btn" style="justify-content:space-between;padding:12px 14px;text-align:right" '+
+              'data-act="bind-emp" data-id="'+ e.id +'">'+
+              '<span>'+ esc(e.name) +'</span>'+
+              '<span style="font-size:12px;color:var(--muted);font-weight:400">'+ esc(e.dept || "—") +'</span>'+
+            '</button>';
+          }).join("") +
+        '</div>';
+    }
+
+    h += '<div class="soft" style="padding:14px">'+
+      '<div style="font-weight:600;font-size:14px;margin-bottom:4px">هذا جهاز المشرف</div>'+
+      '<p style="font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.9">'+
+      'يعرض كل الموظفين وكل البصمات والكشوف. يحتاج رمز المشرف.</p>'+
+      '<button class="btn btn-primary" data-act="bind-admin">أنا المشرف</button>'+
+      '</div>';
     return h;
   }
 
@@ -1064,50 +1204,19 @@
     var h = demoBanner();
     h += '<section class="card" data-admin="1" style="padding:16px;margin-bottom:16px">'+
       '<h2 style="font-size:15px;margin:0 0 12px">'+ (ed ? "تعديل بيانات موظف" : "إضافة موظف") +'</h2>'+
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">'+
-        '<div><label class="label" for="f_name">اسم الموظف</label><input id="f_name" value="'+ esc(ed?ed.name:"") +'" placeholder="الاسم الثلاثي"></div>'+
-        '<div><label class="label" for="f_dept">القسم / الشعبة</label><input id="f_dept" value="'+ esc(ed?ed.dept:"") +'" placeholder="مثال: شعبة الصيانة"></div>'+
-        '<div><label class="label" for="f_type">نوع الدوام</label><select id="f_type" data-act="f_type">'+
-          '<option value="shift"'+ (ed && isDayWorker(ed) ? "" : " selected") +'>مناوب · ٢٤ ساعة ثم ٣ أيام استراحة</option>'+
-          '<option value="day"'+ (ed && isDayWorker(ed) ? " selected" : "") +'>صباحي اعتيادي</option>'+
-        '</select></div>'+
-      '</div>'+
-
-      '<div id="f_shiftbox" style="margin-top:10px"'+ (ed && isDayWorker(ed) ? " hidden" : "") +'>'+
-        '<div style="max-width:240px"><label class="label" for="f_start">تاريخ أول يوم دوام</label>'+
-        '<input id="f_start" type="date" value="'+ esc(ed && ed.startDate ? ed.startDate : todayStr()) +'"></div>'+
-        '<p style="font-size:12px;color:var(--muted);margin:8px 0 0">من هذا التاريخ يبني البرنامج الدورية تلقائياً: يوم دوام ٢٤ ساعة يتبعه ٣ أيام استراحة.</p>'+
-      '</div>'+
-
-      '<div id="f_daybox" style="margin-top:10px"'+ (ed && isDayWorker(ed) ? "" : " hidden") +'>'+
-        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'+
-          '<div><label class="label" for="f_in">بداية الدوام</label><input id="f_in" type="time" value="'+ esc(ed ? empIn(ed) : DEF_IN) +'"></div>'+
-          '<div><label class="label" for="f_out">نهاية الدوام</label><input id="f_out" type="time" value="'+ esc(ed ? empOut(ed) : DEF_OUT) +'"></div>'+
-          '<div><label class="label" for="f_grace">سماح الخروج المبكر (دقيقة)</label><input id="f_grace" type="number" min="0" max="120" value="'+ (ed ? empGrace(ed) : DEF_GRACE) +'"></div>'+
-        '</div>'+
-        '<div style="margin-top:10px"><span class="label">أيام الدوام الرسمية</span>'+
-        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">'+
-          DAYS_AR.map(function(n, i){
-            var on = ed ? empDays(ed).indexOf(i) >= 0 : DEF_DAYS.indexOf(i) >= 0;
-            return '<label class="btn btn-sm" style="gap:6px;cursor:pointer'+ (on ? ';border-color:var(--accent);color:var(--accent)' : '') +'">'+
-              '<input type="checkbox" class="f_wd" value="'+ i +'"'+ (on ? " checked" : "") +' style="width:auto;margin:0">'+ esc(n) +'</label>';
-          }).join("") +
-        '</div></div>'+
-        '<p style="font-size:12px;color:var(--muted);margin:10px 0 0">البقاء بعد نهاية الدوام يُحتسب إضافياً، وكذلك أي دوام في أيام العطلة. والعودة بعد الدوام تُسجَّل ببصمتين إضافيتين، وإن بات حتى الصباح قُسِمت ساعاته عند منتصف الليل.</p>'+
-      '</div>'+
-
+      empFormFields(ed) +
       '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">'+
         '<button class="btn btn-primary" data-act="save-emp">'+ (ed?"حفظ التعديل":"إضافة الموظف") +'</button>'+
         (ed ? '<button class="btn" data-act="cancel-edit">إلغاء</button>' : '')+
       '</div>'+
       '</section>';
 
-    if(!state.employees.length) return h + emptyState("القائمة فارغة", "أضف موظفاً لتبدأ الجدولة.");
+    if(!scopedEmployees().length) return h + emptyState("القائمة فارغة", "أضف موظفاً لتبدأ الجدولة.");
 
     h += '<section class="card" style="padding:0;overflow:hidden"><div class="scroll-x"><table><thead><tr>'+
       '<th>الموظف</th><th>القسم</th><th>النوع</th><th>الجدولة</th><th>حالة اليوم</th><th>الدوام القادم</th><th class="no-print">إجراءات</th>'+
       '</tr></thead><tbody>';
-    state.employees.forEach(function(e){
+    scopedEmployees().forEach(function(e){
       var dayW = isDayWorker(e);
       var duty = isDutyDay(e, ui.day);
       var next = ui.day;
@@ -1146,7 +1255,7 @@
         '<span style="display:flex;gap:5px;align-items:center"><span class="dot" style="background:var(--line)"></span> استراحة</span>'+
       '</div></section>';
 
-    if(!state.employees.length) return h + emptyState("لا توجد جدولة", "أضف موظفاً أولاً.");
+    if(!scopedEmployees().length) return h + emptyState("لا توجد جدولة", "أضف موظفاً أولاً.");
 
     h += '<h2 style="font-size:16px;margin:0 0 12px">'+ MONTHS_AR[m] +' <span class="num">'+ y +'</span></h2>';
     if(ui.calEmp === "all") h += matrixTable(y, m);
@@ -1156,7 +1265,7 @@
 
   function empSelect(id, val, withAll){
     var o = withAll ? '<option value="all"'+ (val==="all"?" selected":"") +'>كل الموظفين</option>' : '<option value="">— اختر موظفاً —</option>';
-    state.employees.forEach(function(e){
+    scopedEmployees().forEach(function(e){
       o += '<option value="'+ e.id +'"'+ (val===e.id?" selected":"") +'>'+ esc(e.name) +'</option>';
     });
     return '<select id="'+ id +'" data-act="'+ id +'">'+ o +'</select>';
@@ -1208,7 +1317,7 @@
       head += '<th style="min-width:34px;padding:6px 2px"><div class="num">'+ d +'</div><div style="font-size:10px;font-weight:400">'+ dayName(ds).slice(0,3) +'</div></th>';
     }
     var body = "";
-    state.employees.forEach(function(e){
+    scopedEmployees().forEach(function(e){
       var row = '<td style="position:sticky;right:0;background:var(--surface);text-align:right;font-weight:600;white-space:nowrap">'+ esc(e.name) +'</td>';
       for(var d=1; d<=last; d++){
         var ds = key(new Date(y,m,d,12));
@@ -1284,12 +1393,25 @@
           (m.at ? esc(new Date(m.at).toLocaleString("ar-IQ")) : "لم تتم بعد") +'</div>'+
         (m.err ? '<div style="color:var(--danger)">آخر خطأ: '+ esc(m.err) +'</div>' : '')+
         '</div>'+
-        '<div style="margin-top:12px"><button class="btn btn-primary" data-act="sync-now">مزامنة الآن</button></div>'+
+        '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
+          '<button class="btn btn-primary" data-act="sync-now">مزامنة الآن</button>'+
+          '<button class="btn" data-act="sync-all">رفع كل البيانات</button>'+
+        '</div>'+
         '<p style="font-size:12px;color:var(--muted);margin:10px 0 0;line-height:1.9">'+
         'تجري المزامنة تلقائياً عند فتح التطبيق وبعد كل بصمة. وإن انقطع الإنترنت يُحفظ كل شيء محلياً ويُرفع عند عودة الاتصال.</p>';
     }
+    var r = deviceRole();
+    var who = r === "admin" ? "جهاز المشرف — يعرض كل الموظفين"
+            : (r ? ("جهاز الموظف: "+ ((getEmp(r) || {}).name || "غير معروف")) : "لم يُربط بعد");
+    var device = '<div class="soft" style="padding:12px 14px;margin-top:12px;display:flex;'+
+      'justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
+      '<div><div class="label">نطاق هذا الجهاز</div>'+
+      '<div style="font-size:13px;font-weight:600">'+ esc(who) +'</div></div>'+
+      (ui.unlocked ? '<button class="btn btn-sm" data-act="unbind">تغيير</button>' : '')+
+      '</div>';
+
     return '<section class="card" style="padding:16px;margin-top:16px">'+
-      '<h2 style="font-size:15px;margin:0 0 10px">المزامنة السحابية</h2>'+ body +'</section>';
+      '<h2 style="font-size:15px;margin:0 0 10px">المزامنة السحابية</h2>'+ body + device +'</section>';
   }
 
   function rateTile(label, val, sub){
@@ -1539,28 +1661,8 @@
       delete state.records[dk]; tomb("rec", dk); save(); render(); return; }
 
     if(a === "save-emp"){
-      var name = (document.getElementById("f_name").value||"").trim();
-      var dept = (document.getElementById("f_dept").value||"").trim();
-      var type = document.getElementById("f_type").value;
-      if(!name){ flash("أدخل اسم الموظف."); return; }
-
-      var data = { name:name, dept:dept, type:type };
-      if(type === "day"){
-        var tin = document.getElementById("f_in").value || DEF_IN;
-        var tout = document.getElementById("f_out").value || DEF_OUT;
-        if(mins(tout) <= mins(tin)){ flash("نهاية الدوام يجب أن تكون بعد بدايته."); return; }
-        var wd = [];
-        document.querySelectorAll(".f_wd").forEach(function(c){ if(c.checked) wd.push(Number(c.value)); });
-        if(!wd.length){ flash("اختر يوم دوام رسمي واحداً على الأقل."); return; }
-        data.startTime = tin; data.endTime = tout; data.workDays = wd;
-        data.grace = Math.max(0, Number(document.getElementById("f_grace").value) || 0);
-        data.startDate = null;
-      } else {
-        var start = document.getElementById("f_start").value;
-        if(!start){ flash("أدخل تاريخ أول يوم دوام."); return; }
-        data.startDate = start;
-        data.startTime = null; data.endTime = null; data.workDays = null; data.grace = null;
-      }
+      var data = readEmpForm();
+      if(!data) return;
 
       if(ui.editing){
         var e = getEmp(ui.editing.id);
@@ -1600,7 +1702,45 @@
     }
     if(a === "restore-open"){ openRestore(); return; }
     if(a === "set-pin"){ openPinChange(); return; }
+    if(a === "self-reg-open"){ ui.selfReg = true; render(); return; }
+    if(a === "self-reg-cancel"){ ui.selfReg = false; render(); return; }
+    if(a === "self-register"){
+      var sd = readEmpForm();
+      if(!sd) return;                       // readEmpForm يعرض سبب الرفض
+      sd.id = "e" + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+      sTouch(sd);
+      state.employees.push(sd);
+      state.device = sd.id;
+      state.demo = false; ui.selfReg = false;
+      syncMeta().pulledAt = "1970-01-01T00:00:00Z";
+      save(); render(); syncNow(true);
+      flash("سُجّلت بياناتك. ستصل إلى المشرف تلقائياً.");
+      return;
+    }
+    if(a === "bind-emp"){
+      var be = getEmp(el.dataset.id);
+      if(!be) return;
+      state.device = be.id;
+      syncMeta().pulledAt = "1970-01-01T00:00:00Z";   // يعيد بناء نطاقه من جديد
+      save(); render(); flash("رُبط الجهاز بـ "+ be.name +".");
+      return;
+    }
+    if(a === "bind-admin"){
+      if(!ui.unlocked){ openPin(); return; }
+      state.device = "admin";
+      syncMeta().pulledAt = "1970-01-01T00:00:00Z";
+      save(); render(); flash("هذا جهاز المشرف.");
+      return;
+    }
+    if(a === "unbind"){
+      state.device = null; save(); render(); return;
+    }
     if(a === "sync-now"){ syncNow(false); return; }
+    if(a === "sync-all"){
+      stampLegacy();
+      syncMeta().pushedAt = 0;          // يعيد دفع كل ما على الجهاز
+      save(); syncNow(false); return;
+    }
 
     if(a === "save-rates"){
       var rs = Math.max(0, Number(document.getElementById("r_shift").value) || 0);
@@ -2145,8 +2285,8 @@
     window.addEventListener("online", function(){ syncNow(true); });
     setInterval(function(){ syncNow(true); }, 5*60*1000);
   }
-  if(!state.employees.length) ui.tab = "staff";
-  if(state.employees.length) ui.sheetEmp = state.employees[0].id;
+  if(isAdminDevice() && !state.employees.length) ui.tab = "staff";
+  if(scopedEmployees().length) ui.sheetEmp = scopedEmployees()[0].id;
   render();
 })();
 </script>
