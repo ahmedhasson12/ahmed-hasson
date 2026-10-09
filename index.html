@@ -197,6 +197,7 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" id="syncBtn" data-act="sync-now" hidden>مزامنة</button>
           <button class="btn btn-sm" id="lockBtn" data-act="lock-toggle">🔒 مقفل</button>
           <button class="btn btn-sm" id="pinBtn" data-act="set-pin" hidden>تغيير الرمز</button>
           <span id="netPill" class="pill pill-ot" hidden>غير متصل</span><button class="btn btn-sm btn-primary" id="installBtn" hidden>تثبيت التطبيق</button><button class="btn btn-sm" data-act="backup">نسخة احتياطية</button>
@@ -237,10 +238,19 @@
   // اسم الجهة كما يظهر في ترويسة الكشف
   var ORG_NAME = "شركة مصافي الوسط";
 
+  /* ===================================================================
+     المزامنة السحابية — املأ القيمتين من لوحة Supabase ثم ارفع الملف.
+     اتركهما فارغتين لتبقى المزامنة معطّلة ويعمل التطبيق محلياً كالسابق.
+     =================================================================== */
+  var SYNC_URL = "https://lrurzgzlsdortjvhfkmq.supabase.co";                 // مثال: https://abcdefgh.supabase.co
+  var SYNC_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxydXJ6Z3psc2RvcnRqdmhma21xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1MzYxMzYsImV4cCI6MjEwNzExMjEzNn0.AvFqjir8twhmNj7NomtNKdls0MzmVFYcclPgG5qNCcU";                 // مفتاح anon public
+  var SYNC_WS  = "mrc-eg6hpxd5";         // رمز مساحة العمل — واحد على كل الأجهزة
+
   /* ============ التخزين ============ */
   var KEY = "shift_attendance_v1";
   var DEF_RATES = { shift:4000, after:4000, holiday:5000 };   // دينار عراقي للساعة
-  var state = { employees:[], records:{}, demo:false, rates:null, holidays:{} };
+  var state = { employees:[], records:{}, demo:false, rates:null, holidays:{},
+                tombs:{}, sync:null, settingsU:0 };
   var ui = { tab:"today", day:todayStr(), calMonth:monthStr(new Date()), calEmp:"all",
              sheetEmp:"", sheetMonth:monthStr(new Date()), editing:null, confirmDel:null,
              unlocked:false };
@@ -277,6 +287,13 @@
     }
     var cb = document.getElementById("pinBtn");
     if(cb) cb.hidden = locked;
+    var sb = document.getElementById("syncBtn");
+    if(sb){
+      sb.hidden = !syncOn();
+      var m = state.sync || {};
+      sb.textContent = m.err ? "مزامنة ✕" : (m.at ? "مزامنة ✓" : "مزامنة");
+      sb.title = m.err ? m.err : (m.at ? ("آخر مزامنة: "+ new Date(m.at).toLocaleString("ar-IQ")) : "");
+    }
   }
 
   function load(){
@@ -284,7 +301,8 @@
       var raw = localStorage.getItem(KEY);
       if(raw){ var d = JSON.parse(raw); if(d && d.employees){
         state = { employees:d.employees||[], records:d.records||{}, demo:!!d.demo,
-                  rates:d.rates || null, holidays:d.holidays || {} };
+                  rates:d.rates || null, holidays:d.holidays || {},
+                  tombs:d.tombs || {}, sync:d.sync || null, settingsU:d.settingsU || 0 };
         return true; } }
     }catch(e){}
     return false;
@@ -331,6 +349,146 @@
     var seq = ws.every(function(v,i){ return i === 0 || v === ws[i-1]+1; });
     return seq && ws.length > 1 ? DAYS_AR[ws[0]]+" – "+DAYS_AR[ws[ws.length-1]]
                                 : ws.map(function(v){ return DAYS_AR[v]; }).join("، ");
+  }
+
+  /* ============ المزامنة السحابية ============
+     قاعدة واحدة على Supabase تجمع سجلات كل الأجهزة.
+     الدفع والسحب بختم زمني، والأحدث يغلب. والحذف يُنقل بشواهد (tombstones). */
+
+  function syncOn(){ return !!(SYNC_URL && SYNC_KEY); }
+  function sTouch(o){ if(o) o.u = Date.now(); return o; }
+  function syncMeta(){
+    state.sync = state.sync || { pushedAt:0, pulledAt:"1970-01-01T00:00:00Z", at:null, err:null };
+    return state.sync;
+  }
+  function tomb(kind, id){
+    state.tombs = state.tombs || {};
+    state.tombs[kind + ":" + id] = Date.now();
+  }
+
+  function sFetch(path, opts){
+    opts = opts || {};
+    opts.headers = Object.assign({
+      "apikey": SYNC_KEY,
+      "Authorization": "Bearer " + SYNC_KEY,
+      "Content-Type": "application/json"
+    }, opts.headers || {});
+    return fetch(SYNC_URL.replace(/\/+$/,"") + "/rest/v1/" + path, opts).then(function(r){
+      if(!r.ok) return r.text().then(function(t){ throw new Error(r.status + " " + t.slice(0,120)); });
+      return r.status === 204 ? null : r.json();
+    });
+  }
+  function sUpsert(table, rows){
+    if(!rows.length) return Promise.resolve();
+    return sFetch(table, { method:"POST", body:JSON.stringify(rows),
+      headers:{ "Prefer":"resolution=merge-duplicates,return=minimal" } });
+  }
+
+  function syncPush(){
+    var m = syncMeta(), since = m.pushedAt || 0, maxU = since;
+    var recs = [], emps = [];
+
+    Object.keys(state.records).forEach(function(k){
+      var r = state.records[k];
+      if(!r || !(r.u > since)) return;
+      var parts = k.split("|");
+      recs.push({ id: SYNC_WS + "|" + k, ws: SYNC_WS, emp_id: parts[0], day: parts[1],
+                  type: r.type || "duty", t: r.t, extra: !!r.extra, u: r.u, deleted: false });
+      if(r.u > maxU) maxU = r.u;
+    });
+    state.employees.forEach(function(e){
+      if(!(e.u > since)) return;
+      emps.push({ id: SYNC_WS + "|" + e.id, ws: SYNC_WS, emp_id: e.id, data: e, u: e.u, deleted: false });
+      if(e.u > maxU) maxU = e.u;
+    });
+    Object.keys(state.tombs || {}).forEach(function(tk){
+      var ts = state.tombs[tk];
+      if(!(ts > since)) return;
+      var kind = tk.slice(0, tk.indexOf(":")), id = tk.slice(tk.indexOf(":")+1);
+      if(kind === "rec"){
+        var p = id.split("|");
+        recs.push({ id: SYNC_WS + "|" + id, ws: SYNC_WS, emp_id: p[0], day: p[1],
+                    type:"duty", t:[null,null,null,null], extra:false, u: ts, deleted: true });
+      } else {
+        emps.push({ id: SYNC_WS + "|" + id, ws: SYNC_WS, emp_id: id, data:{}, u: ts, deleted: true });
+      }
+      if(ts > maxU) maxU = ts;
+    });
+
+    var settings = null;
+    if((state.settingsU || 0) > since){
+      settings = [{ ws: SYNC_WS, rates: rates(), holidays: state.holidays || {}, u: state.settingsU }];
+      if(state.settingsU > maxU) maxU = state.settingsU;
+    }
+
+    return sUpsert("records", recs)
+      .then(function(){ return sUpsert("employees", emps); })
+      .then(function(){ return settings ? sUpsert("settings", settings) : null; })
+      .then(function(){ m.pushedAt = maxU; });
+  }
+
+  function syncPull(){
+    var m = syncMeta(), since = encodeURIComponent(m.pulledAt);
+    var q = "ws=eq." + encodeURIComponent(SYNC_WS) + "&updated_at=gt." + since;
+    var newest = m.pulledAt;
+    function note(row){ if(row.updated_at && row.updated_at > newest) newest = row.updated_at; }
+
+    return sFetch("records?" + q + "&order=updated_at.asc&limit=5000").then(function(rows){
+      (rows||[]).forEach(function(row){
+        note(row);
+        var k = row.emp_id + "|" + row.day;
+        var local = state.records[k];
+        // لا نكتب فوق تعديل محلي لم يُدفع بعد
+        if(local && local.u > (m.pushedAt || 0)) return;
+        if(row.deleted){ delete state.records[k]; return; }
+        state.records[k] = { type:row.type, t:row.t, extra:!!row.extra, u:row.u || Date.now() };
+      });
+      return sFetch("employees?" + q + "&order=updated_at.asc&limit=2000");
+    }).then(function(rows){
+      (rows||[]).forEach(function(row){
+        note(row);
+        var idx = -1;
+        for(var i=0;i<state.employees.length;i++){ if(state.employees[i].id === row.emp_id){ idx = i; break; } }
+        var local = idx >= 0 ? state.employees[idx] : null;
+        if(local && local.u > (m.pushedAt || 0)) return;
+        if(row.deleted){ if(idx >= 0) state.employees.splice(idx,1); return; }
+        var e = row.data || {}; e.id = row.emp_id; e.u = row.u || Date.now();
+        if(idx >= 0) state.employees[idx] = e; else state.employees.push(e);
+      });
+      return sFetch("settings?ws=eq." + encodeURIComponent(SYNC_WS) + "&updated_at=gt." + since);
+    }).then(function(rows){
+      (rows||[]).forEach(function(row){
+        note(row);
+        if((state.settingsU || 0) > (m.pushedAt || 0)) return;
+        if(row.rates) state.rates = row.rates;
+        if(row.holidays) state.holidays = row.holidays;
+        state.settingsU = row.u || Date.now();
+      });
+      m.pulledAt = newest;
+    });
+  }
+
+  var syncBusy = false, syncPending = false;
+  function syncNow(silent){
+    if(!syncOn()){ if(!silent) flash("المزامنة غير مفعّلة على هذه النسخة."); return Promise.resolve(); }
+    // طلب أثناء مزامنة جارية لا يُهمل، بل يُعاد بعد انتهائها
+    if(syncBusy){ syncPending = true; return Promise.resolve(); }
+    if(!navigator.onLine){ if(!silent) flash("لا اتصال بالإنترنت — ستُزامَن لاحقاً."); return Promise.resolve(); }
+    syncBusy = true;
+    var m = syncMeta();
+    if(!silent) flash("جارٍ المزامنة…");
+    return syncPush().then(syncPull).then(function(){
+      m.at = new Date().toISOString(); m.err = null;
+      state.demo = false; save(); render();
+      if(!silent) flash("تمت المزامنة.");
+    }).catch(function(e){
+      m.err = String(e && e.message || e).slice(0,140);
+      save(); render();
+      if(!silent) flash("تعذّرت المزامنة: "+ m.err);
+    }).then(function(){
+      syncBusy = false;
+      if(syncPending){ syncPending = false; setTimeout(function(){ syncNow(true); }, 400); }
+    });
   }
 
   /* ============ العطل الرسمية والأسعار ============ */
@@ -1109,7 +1267,29 @@
         '<div><button class="btn btn-primary" data-act="add-holiday">إضافة</button></div>'+
       '</div></section>';
 
-    return h + holidayList(true);
+    return h + holidayList(true) + syncSection();
+  }
+
+  function syncSection(){
+    var m = state.sync || {};
+    var body;
+    if(!syncOn()){
+      body = '<p style="font-size:13px;color:var(--muted);margin:0;line-height:1.9">'+
+        'غير مفعّلة على هذه النسخة. لتفعيلها يُدخَل عنوان قاعدة البيانات ومفتاحها في ملف التطبيق، '+
+        'فتجتمع سجلات كل الأجهزة في مكان واحد. كل جهاز الآن يحتفظ بسجله وحده.</p>';
+    } else {
+      body = '<div style="display:grid;gap:6px;font-size:13px;line-height:1.9">'+
+        '<div><span style="color:var(--muted)">مساحة العمل:</span> <span class="tnum">'+ esc(SYNC_WS) +'</span></div>'+
+        '<div><span style="color:var(--muted)">آخر مزامنة:</span> '+
+          (m.at ? esc(new Date(m.at).toLocaleString("ar-IQ")) : "لم تتم بعد") +'</div>'+
+        (m.err ? '<div style="color:var(--danger)">آخر خطأ: '+ esc(m.err) +'</div>' : '')+
+        '</div>'+
+        '<div style="margin-top:12px"><button class="btn btn-primary" data-act="sync-now">مزامنة الآن</button></div>'+
+        '<p style="font-size:12px;color:var(--muted);margin:10px 0 0;line-height:1.9">'+
+        'تجري المزامنة تلقائياً عند فتح التطبيق وبعد كل بصمة. وإن انقطع الإنترنت يُحفظ كل شيء محلياً ويُرفع عند عودة الاتصال.</p>';
+    }
+    return '<section class="card" style="padding:16px;margin-top:16px">'+
+      '<h2 style="font-size:15px;margin:0 0 10px">المزامنة السحابية</h2>'+ body +'</section>';
   }
 
   function rateTile(label, val, sub){
@@ -1342,20 +1522,21 @@
           '<div style="display:flex;gap:8px"><button class="btn" data-act="modal-close">حسناً</button></div>');
         return;
       }
-      rec.t[slot] = nowHM();
-      state.demo = false; save(); render(); return;
+      rec.t[slot] = nowHM(); sTouch(rec);
+      state.demo = false; save(); render(); syncNow(true); return;
     }
-    if(a === "add-rest"){ ensureRec(el.dataset.emp, el.dataset.date, "rest"); save(); render(); return; }
+    if(a === "add-rest"){ sTouch(ensureRec(el.dataset.emp, el.dataset.date, "rest")); save(); render(); return; }
     if(a === "add-extra"){
       var re = ensureRec(el.dataset.emp, el.dataset.date, "day");
-      re.extra = true; save(); render(); return;
+      re.extra = true; sTouch(re); save(); render(); return;
     }
     if(a === "del-extra"){
       var rx = getRec(el.dataset.emp, el.dataset.date);
-      if(rx){ rx.t[2] = null; rx.t[3] = null; rx.extra = false; }
+      if(rx){ rx.t[2] = null; rx.t[3] = null; rx.extra = false; sTouch(rx); }
       save(); render(); return;
     }
-    if(a === "del-rest"){ delete state.records[rkey(el.dataset.emp, el.dataset.date)]; save(); render(); return; }
+    if(a === "del-rest"){ var dk = rkey(el.dataset.emp, el.dataset.date);
+      delete state.records[dk]; tomb("rec", dk); save(); render(); return; }
 
     if(a === "save-emp"){
       var name = (document.getElementById("f_name").value||"").trim();
@@ -1384,12 +1565,14 @@
       if(ui.editing){
         var e = getEmp(ui.editing.id);
         for(var k in data) e[k] = data[k];
+        sTouch(e);
         ui.editing = null;
       } else {
         data.id = "e"+Date.now().toString(36);
+        sTouch(data);
         state.employees.push(data);
       }
-      state.demo = false; save(); render(); return;
+      state.demo = false; save(); render(); syncNow(true); return;
     }
     if(a === "edit-emp"){ ui.editing = getEmp(el.dataset.id); render(); window.scrollTo({top:0,behavior:"smooth"}); return; }
     if(a === "cancel-edit"){ ui.editing = null; render(); return; }
@@ -1398,7 +1581,8 @@
     if(a === "del-emp-yes"){
       var id = el.dataset.id;
       state.employees = state.employees.filter(function(e){ return e.id !== id; });
-      Object.keys(state.records).forEach(function(k){ if(k.indexOf(id+"|") === 0) delete state.records[k]; });
+      tomb("emp", id);
+      Object.keys(state.records).forEach(function(k){ if(k.indexOf(id+"|") === 0){ delete state.records[k]; tomb("rec", k); } });
       if(ui.sheetEmp === id) ui.sheetEmp = "";
       if(ui.calEmp === id) ui.calEmp = "all";
       ui.confirmDel = null; save(); render(); return;
@@ -1410,19 +1594,21 @@
 
     if(a === "backup"){
       var data = JSON.stringify({ employees:state.employees, records:state.records,
-                                  rates:rates(), holidays:state.holidays || {} }, null, 2);
+                                  rates:rates(), holidays:state.holidays || {},
+                                  tombs:state.tombs || {}, settingsU:state.settingsU || 0 }, null, 2);
       copyText(data, el); return;
     }
     if(a === "restore-open"){ openRestore(); return; }
     if(a === "set-pin"){ openPinChange(); return; }
+    if(a === "sync-now"){ syncNow(false); return; }
 
     if(a === "save-rates"){
       var rs = Math.max(0, Number(document.getElementById("r_shift").value) || 0);
       var ra = Math.max(0, Number(document.getElementById("r_after").value) || 0);
       var rh = Math.max(0, Number(document.getElementById("r_hol").value) || 0);
       if(!rs || !ra || !rh){ flash("أدخل سعراً صحيحاً للبنود الثلاثة."); return; }
-      state.rates = { shift:rs, after:ra, holiday:rh };
-      save(); render(); flash("حُفظت الأسعار.");
+      state.rates = { shift:rs, after:ra, holiday:rh }; state.settingsU = Date.now();
+      save(); render(); syncNow(true); flash("حُفظت الأسعار.");
       return;
     }
     if(a === "add-holiday"){
@@ -1430,8 +1616,8 @@
       var hn = (document.getElementById("hol_name").value || "").trim();
       if(!hd){ flash("اختر تاريخ العطلة."); return; }
       state.holidays = state.holidays || {};
-      state.holidays[hd] = hn || "عطلة رسمية";
-      save(); render(); flash("أُضيفت عطلة "+ fmtDate(hd) +".");
+      state.holidays[hd] = hn || "عطلة رسمية"; state.settingsU = Date.now();
+      save(); render(); syncNow(true); flash("أُضيفت عطلة "+ fmtDate(hd) +".");
       return;
     }
     if(a === "mark-holiday"){
@@ -1452,13 +1638,13 @@
       var md = el.dataset.date;
       var mn = (document.getElementById("qhol_name").value || "").trim();
       state.holidays = state.holidays || {};
-      state.holidays[md] = mn || "عطلة رسمية";
-      save(); closeModal(); render(); flash("حُدِّد "+ fmtDate(md) +" عطلة رسمية.");
+      state.holidays[md] = mn || "عطلة رسمية"; state.settingsU = Date.now();
+      save(); closeModal(); render(); syncNow(true); flash("حُدِّد "+ fmtDate(md) +" عطلة رسمية.");
       return;
     }
     if(a === "del-holiday"){
       if(state.holidays) delete state.holidays[el.dataset.date];
-      save(); render(); return;
+      state.settingsU = Date.now(); save(); render(); syncNow(true); return;
     }
     if(a === "modal-close"){ closeModal(); return; }
     if(a === "restore-apply"){
@@ -1468,6 +1654,7 @@
         if(!d || !Array.isArray(d.employees)) throw new Error("bad");
         state.employees = d.employees; state.records = d.records || {}; state.demo = false;
         state.rates = d.rates || null; state.holidays = d.holidays || {};
+        state.tombs = d.tombs || {}; state.settingsU = d.settingsU || 0;
         save(); closeModal(); render(); flash("تمت استعادة البيانات.");
       }catch(e){ document.getElementById("restore_err").textContent = "النص غير صالح — الصق نسخة احتياطية كاملة بصيغة JSON."; }
       return;
@@ -1481,7 +1668,7 @@
     touchLock();
     if(a === "settime"){
       var rec = ensureRec(el.dataset.emp, el.dataset.date, el.dataset.type);
-      rec.t[Number(el.dataset.slot)] = el.value || null;
+      rec.t[Number(el.dataset.slot)] = el.value || null; sTouch(rec);
       dropIfEmpty(el.dataset.emp, el.dataset.date);
       state.demo = false; save(); render(); return;
     }
@@ -1953,6 +2140,11 @@
 
   /* ============ الإقلاع ============ */
   if(!load()) seedDemo();
+  if(syncOn()){
+    setTimeout(function(){ syncNow(true); }, 800);
+    window.addEventListener("online", function(){ syncNow(true); });
+    setInterval(function(){ syncNow(true); }, 5*60*1000);
+  }
   if(!state.employees.length) ui.tab = "staff";
   if(state.employees.length) ui.sheetEmp = state.employees[0].id;
   render();

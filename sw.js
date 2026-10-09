@@ -1,7 +1,7 @@
 /* سجل المناوبات — عامل الخدمة (Service Worker)
    يخزّن ملفات التطبيق ليعمل كاملاً بدون إنترنت. */
 
-const VERSION = "shift-attendance-v18";
+const VERSION = "shift-attendance-v20";
 const CORE = [
   "./",
   "./index.html",
@@ -35,6 +35,10 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
+
+  // طلبات المزامنة لا تُخزَّن أبداً، وإلا عادت نتائج قديمة بدل الحيّة
+  if (url.pathname.includes("/rest/v1/") || url.pathname.includes("/auth/v1/")) return;
+
   const sameOrigin = url.origin === self.location.origin;
 
   if (req.mode === "navigate") {
