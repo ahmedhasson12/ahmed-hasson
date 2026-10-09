@@ -388,7 +388,11 @@
     }, opts.headers || {});
     return fetch(SYNC_URL.replace(/\/+$/,"") + "/rest/v1/" + path, opts).then(function(r){
       if(!r.ok) return r.text().then(function(t){ throw new Error(r.status + " " + t.slice(0,120)); });
-      return r.status === 204 ? null : r.json();
+      // ردّ الرفع بلا جسم، ومحاولة قراءته JSON تُفشل المزامنة في Safari
+      return r.text().then(function(t){
+        if(!t) return null;
+        try{ return JSON.parse(t); }catch(e){ return null; }
+      });
     });
   }
   function sUpsert(table, rows){
