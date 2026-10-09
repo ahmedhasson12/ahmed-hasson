@@ -1010,20 +1010,26 @@
       return h;
     }
 
-    h += '<div style="display:grid;gap:8px;margin-bottom:18px">'+
-      '<button class="btn btn-primary" style="padding:14px" data-act="self-reg-open">أنا موظف — أسجّل بياناتي</button>'+
-      '</div>';
-
     if(known.length){
-      h += '<h3 style="font-size:14px;margin:0 0 10px">أو اختر اسمك إن كنت مسجّلاً</h3>'+
-        '<div style="display:grid;gap:8px;margin-bottom:18px">'+
+      // من كان يستخدم التطبيق قبل اليوم اسمه محفوظ هنا — يختاره ولا يعيد التسجيل
+      h += '<h3 style="font-size:14px;margin:0 0 10px">اختر اسمك</h3>'+
+        '<div style="display:grid;gap:8px;margin-bottom:10px">'+
           known.map(function(e){
-            return '<button class="btn" style="justify-content:space-between;padding:12px 14px;text-align:right" '+
+            return '<button class="btn btn-primary" style="justify-content:space-between;padding:13px 14px;text-align:right" '+
               'data-act="bind-emp" data-id="'+ e.id +'">'+
               '<span>'+ esc(e.name) +'</span>'+
-              '<span style="font-size:12px;color:var(--muted);font-weight:400">'+ esc(e.dept || "—") +'</span>'+
+              '<span style="font-size:12px;opacity:.8;font-weight:400">'+ esc(e.dept || "—") +'</span>'+
             '</button>';
           }).join("") +
+        '</div>'+
+        '<p style="font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.9">'+
+        'باختيار اسمك تبقى بصماتك السابقة كما هي وترتفع إلى المشرف.</p>'+
+        '<div style="margin-bottom:18px">'+
+          '<button class="btn" data-act="self-reg-open">لست في القائمة؟ سجّل بياناتك</button>'+
+        '</div>';
+    } else {
+      h += '<div style="display:grid;gap:8px;margin-bottom:18px">'+
+        '<button class="btn btn-primary" style="padding:14px" data-act="self-reg-open">أنا موظف — أسجّل بياناتي</button>'+
         '</div>';
     }
 
@@ -1722,14 +1728,15 @@
       if(!be) return;
       state.device = be.id;
       syncMeta().pulledAt = "1970-01-01T00:00:00Z";   // يعيد بناء نطاقه من جديد
-      save(); render(); flash("رُبط الجهاز بـ "+ be.name +".");
+      save(); render(); syncNow(true);
+      flash("رُبط الجهاز بـ "+ be.name +". ترتفع بصماتك السابقة الآن.");
       return;
     }
     if(a === "bind-admin"){
       if(!ui.unlocked){ openPin(); return; }
       state.device = "admin";
       syncMeta().pulledAt = "1970-01-01T00:00:00Z";
-      save(); render(); flash("هذا جهاز المشرف.");
+      save(); render(); syncNow(true); flash("هذا جهاز المشرف.");
       return;
     }
     if(a === "unbind"){
