@@ -836,24 +836,6 @@
   }
 
   /* ============ بيانات تجريبية ============ */
-  function seedDemo(){
-    var t = todayStr();
-    var e1 = { id:"e1", name:"أحمد كاظم عبد", dept:"شعبة الصيانة", startDate:t };
-    var e2 = { id:"e2", name:"حسين عبد الله جبر", dept:"شعبة الحراسات", startDate:addDays(t,-1) };
-    var e3 = { id:"e3", name:"زينب محمد علي", dept:"شعبة السيطرة", startDate:addDays(t,-2) };
-    var e4 = { id:"e4", name:"مروان سالم داود", dept:"الشؤون الإدارية", type:"day",
-               startTime:DEF_IN, endTime:DEF_OUT, workDays:DEF_DAYS.slice(), grace:DEF_GRACE };
-    state.employees = [e1,e2,e3,e4];
-    state.records = {};
-    // وجبة سابقة مكتملة مع ساعة ونصف إضافية
-    state.records[rkey("e1", addDays(t,-4))] = { type:"duty", t:["07:00","14:10","22:05","08:30"] };
-    // وجبة سابقة مكتملة تماماً
-    state.records[rkey("e2", addDays(t,-5))] = { type:"duty", t:["07:05","14:00","22:00","07:05"] };
-    // دوام في يوم استراحة
-    state.records[rkey("e3", addDays(t,-3))] = { type:"rest", t:["08:00",null,null,"13:30"] };
-    state.demo = true;
-    save();
-  }
 
   /* ============ عرض الواجهات ============ */
   var view = document.getElementById("view");
@@ -1036,7 +1018,7 @@
           }).join("") +
         '</div>'+
         '<p style="font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.9">'+
-        'باختيار اسمك تبقى بصماتك السابقة كما هي وترتفع إلى المشرف.</p>'+
+        'الأسماء المسجّلة سابقاً يحتاج ربطها إلى رمز المشرف، فلا يأخذ أحد اسم غيره. أما الاسم الجديد فتضيفه بنفسك.</p>'+
         '<div style="margin-bottom:18px">'+
           '<button class="btn" data-act="self-reg-open">لست في القائمة؟ سجّل بياناتك</button>'+
         '</div>';
@@ -1633,6 +1615,17 @@
           save(); render(); syncNow(true); flash("هذا جهاز المشرف.");
           return;
         }
+        if(ui.pinFor && ui.pinFor.indexOf("emp:") === 0){
+          var eid = ui.pinFor.slice(4); ui.pinFor = null;
+          var emp2 = getEmp(eid);
+          if(emp2){
+            state.device = emp2.id;
+            syncMeta().pulledAt = "1970-01-01T00:00:00Z";
+            save(); render(); syncNow(true);
+            flash("رُبط الجهاز بـ "+ emp2.name +". ترتفع بصماته السابقة الآن.");
+          }
+          return;
+        }
         render();
         flash("فُتح وضع المشرف. يُقفل تلقائياً بعد خمس دقائق.");
       } else {
@@ -1745,6 +1738,11 @@
       return;
     }
     if(a === "bind-emp"){
+      ui.pinFor = "emp:" + el.dataset.id;   // اسم موجود لا يُمنح إلا بموافقة المشرف
+      openPin();
+      return;
+    }
+    if(a === "bind-emp-ok"){
       var be = getEmp(el.dataset.id);
       if(!be) return;
       state.device = be.id;
@@ -2242,7 +2240,10 @@
   }
   function openPin(){
     openModal('<h2 style="font-size:16px;margin:0 0 8px">وضع المشرف</h2>'+
-      '<p style="font-size:13px;color:var(--muted);margin:0 0 10px">تعديل أوقات البصمات وإدارة الموظفين يحتاج رمز المشرف. تسجيل البصمة بزر «الآن» لا يحتاج رمزاً.</p>'+
+      '<p style="font-size:13px;color:var(--muted);margin:0 0 10px;line-height:1.9">'+
+      (ui.pinFor === "admin" ? 'تعيين هذا الجهاز جهازَ إشراف يحتاج رمز المشرف.'
+       : (ui.pinFor ? 'هذا الاسم مسجّل من قبل. ربطه بهذا الجهاز يحتاج موافقة المشرف.'
+       : 'تعديل أوقات البصمات وإدارة الموظفين يحتاج رمز المشرف. تسجيل البصمة بزر «الآن» لا يحتاج رمزاً.')) +'</p>'+
       '<input id="pin_in" type="password" inputmode="numeric" autocomplete="off" placeholder="الرمز السري" style="text-align:center;letter-spacing:.3em;font-size:18px">'+
       '<div id="pin_err" style="color:var(--danger);font-size:12px;margin-top:6px"></div>'+
       '<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" data-act="pin-submit">فتح</button>'+
@@ -2305,7 +2306,7 @@
   })();
 
   /* ============ الإقلاع ============ */
-  if(!load()) seedDemo();
+  load();   // جهاز جديد يبدأ فارغاً ثم يُسأل عن صاحبه
   if(syncOn()){
     setTimeout(function(){ syncNow(true); }, 800);
     window.addEventListener("online", function(){ syncNow(true); });
