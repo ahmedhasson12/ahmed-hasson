@@ -208,6 +208,7 @@
         <button class="tab" role="tab" data-tab="staff">الموظفون</button>
         <button class="tab" role="tab" data-tab="calendar">الجدول الشهري</button>
         <button class="tab" role="tab" data-tab="sheet">كشف الساعات</button>
+        <button class="tab" role="tab" data-tab="rates">العطل والأسعار</button>
       </nav>
     </div>
   </header>
@@ -238,7 +239,8 @@
 
   /* ============ التخزين ============ */
   var KEY = "shift_attendance_v1";
-  var state = { employees:[], records:{}, demo:false };
+  var DEF_RATES = { shift:4000, after:4000, holiday:5000 };   // دينار عراقي للساعة
+  var state = { employees:[], records:{}, demo:false, rates:null, holidays:{} };
   var ui = { tab:"today", day:todayStr(), calMonth:monthStr(new Date()), calEmp:"all",
              sheetEmp:"", sheetMonth:monthStr(new Date()), editing:null, confirmDel:null,
              unlocked:false };
@@ -249,6 +251,7 @@
   var ADMIN_ACTS = { "settime":1, "save-emp":1, "edit-emp":1, "cancel-edit":1,
                      "del-emp":1, "del-emp-yes":1, "del-emp-no":1, "clear-demo":1,
                      "restore-open":1, "restore-apply":1, "del-rest":1, "del-extra":1,
+                     "save-rates":1,
                      "set-pin":1 };
   var AUTO_LOCK_MS = 5 * 60 * 1000, lockTimer = null;
 
@@ -279,7 +282,10 @@
   function load(){
     try{
       var raw = localStorage.getItem(KEY);
-      if(raw){ var d = JSON.parse(raw); if(d && d.employees){ state = { employees:d.employees||[], records:d.records||{}, demo:!!d.demo }; return true; } }
+      if(raw){ var d = JSON.parse(raw); if(d && d.employees){
+        state = { employees:d.employees||[], records:d.records||{}, demo:!!d.demo,
+                  rates:d.rates || null, holidays:d.holidays || {} };
+        return true; } }
     }catch(e){}
     return false;
   }
@@ -327,9 +333,32 @@
                                 : ws.map(function(v){ return DAYS_AR[v]; }).join("، ");
   }
 
+  /* ============ العطل الرسمية والأسعار ============ */
+  function rates(){
+    var r = state.rates || {};
+    return { shift: Number(r.shift) || DEF_RATES.shift,
+             after: Number(r.after) || DEF_RATES.after,
+             holiday: Number(r.holiday) || DEF_RATES.holiday };
+  }
+  function holidayName(ds){
+    var h = state.holidays || {};
+    return Object.prototype.hasOwnProperty.call(h, ds) ? (h[ds] || "عطلة رسمية") : null;
+  }
+  function isHoliday(ds){ return holidayName(ds) !== null; }
+
+  // تقريب الساعات للاحتساب المالي: ما زاد على ٤٥ دقيقة يُرفع ساعةً كاملة، وما دونها يسقط
+  function payHours(m){
+    if(!m || m <= 0) return 0;
+    return Math.floor(m/60) + ((m % 60) > 45 ? 1 : 0);
+  }
+  function fmtIQD(n){
+    return (Number(n)||0).toLocaleString("en-US") + " د.ع";
+  }
+
   function isDutyDay(emp, ds){
     if(!emp) return false;
-    if(isDayWorker(emp)) return empDays(emp).indexOf(parseD(ds).getDay()) >= 0;
+    // العطلة الرسمية تُعطّل دوام الموظف الصباحي، ولا تغيّر دورية المناوب
+    if(isDayWorker(emp)) return !isHoliday(ds) && empDays(emp).indexOf(parseD(ds).getDay()) >= 0;
     if(!emp.startDate) return false;
     var d = diffDays(emp.startDate, ds);
     return ((d % 4) + 4) % 4 === 0;
@@ -481,6 +510,7 @@
 
     var rows = [], scheduled = 0, worked = 0, restWorked = 0;
     var base = 0, ot = 0, openShifts = 0, carryIn = 0, carryOut = 0;
+    var otReg = 0, otHol = 0;   // إضافي اعتيادي · إضافي في العطل
 
     var dayW = isDayWorker(emp);
     // نبدأ المسح من اليوم السابق للشهر: وجبة أو مبيت بدأ أواخر الشهر الماضي قد يقع إضافيه هنا
@@ -495,7 +525,7 @@
         if(duty && !inMonth(ds)){
           // مبيت بدأ آخر الشهر الماضي وامتدّ إلى أول هذا الشهر
           if(sd.otNext > 0 && inMonth(otDate)){
-            ot += sd.otNext; carryIn += sd.otNext;
+            ot += sd.otNext; otReg += sd.otNext; carryIn += sd.otNext;
             rows.push({ date:ds, duty:true, rec:rec, base:0, ot:sd.otNext, carry:"in",
                         note:"إضافي مبيت مُرحّل من "+ fmtDate(ds) });
           }
@@ -506,7 +536,7 @@
           if(sd.started) worked++;
           if(sd.complete){
             rd.base = sd.base; base += sd.base;
-            rd.ot = sd.ot; ot += sd.ot;
+            rd.ot = sd.ot; ot += sd.ot; otReg += sd.ot;
             if(sd.late > 0) nts.push("تأخير "+ fmtH(sd.late));
             if(sd.ot > 0) nts.push("إضافي بعد "+ empOut(emp));
             if(sd.short > 0) nts.push("نقص "+ fmtH(sd.short));
@@ -514,7 +544,7 @@
           else nts.push(rec ? "بصمات ناقصة" : "بدون بصمات");
           if(sd.extraOpen) nts.push("عودة بلا بصمة خروج");
           if(sd.otNext > 0){
-            if(inMonth(otDate)){ rd.ot += sd.otNext; ot += sd.otNext; nts.push("مبيت حتى صباح اليوم التالي"); }
+            if(inMonth(otDate)){ rd.ot += sd.otNext; ot += sd.otNext; otReg += sd.otNext; nts.push("مبيت حتى صباح اليوم التالي"); }
             else { carryOut += sd.otNext; rd.carry = "out";
                    nts.push("إضافي مبيت "+ fmtH(sd.otNext) +" رُحّل إلى الشهر التالي"); }
           }
@@ -524,7 +554,8 @@
           var rh = restStats(rec);
           var rr = { date:ds, duty:false, rec:rec, base:0, ot:0, carry:null, note:"" };
           if(rh.started) restWorked++;
-          if(rh.complete){ rr.ot = rh.ot; ot += rh.ot; rr.note = "دوام في يوم عطلة"; }
+          if(rh.complete){ rr.ot = rh.ot; ot += rh.ot; otHol += rh.ot;
+                           rr.note = "دوام في " + (isHoliday(ds) ? ("عطلة رسمية — "+ holidayName(ds)) : "يوم عطلة"); }
           else rr.note = "تسجيل غير مكتمل";
           rows.push(rr);
         }
@@ -532,7 +563,7 @@
         // ترحيل وارد من الشهر السابق: الساعات الإضافية فقط
         var sIn = dutyStats(rec);
         if(sIn.complete && sIn.ot > 0 && inMonth(otDate)){
-          ot += sIn.ot; carryIn += sIn.ot;
+          ot += sIn.ot; otReg += sIn.ot; carryIn += sIn.ot;
           rows.push({ date:ds, duty:true, rec:rec, base:0, ot:sIn.ot, carry:"in",
                       note:"إضافي مُرحّل من وجبة "+ fmtDate(ds) });
         }
@@ -544,7 +575,7 @@
         if(s.complete){
           row.base = s.base; base += s.base;
           if(s.ot > 0){
-            if(inMonth(otDate)){ row.ot = s.ot; ot += s.ot; row.note = "إضافي بعد ٢٤ ساعة"; }
+            if(inMonth(otDate)){ row.ot = s.ot; ot += s.ot; otReg += s.ot; row.note = "إضافي بعد ٢٤ ساعة"; }
             else { row.carry = "out"; carryOut += s.ot;
                    row.note = "إضافي "+ fmtH(s.ot) +" رُحّل إلى الشهر التالي"; }
           }
@@ -558,7 +589,7 @@
         var r = restStats(rec);
         var rw = { date:ds, duty:false, rec:rec, base:0, ot:0, carry:null, note:"" };
         if(r.started) restWorked++;
-        if(r.complete){ rw.ot = r.ot; ot += r.ot; rw.note = "دوام في يوم استراحة"; }
+        if(r.complete){ rw.ot = r.ot; ot += r.ot; otReg += r.ot; rw.note = "دوام في يوم استراحة"; }
         else rw.note = "تسجيل غير مكتمل";
         rows.push(rw);
       }
@@ -586,9 +617,24 @@
                    from:a, to:b, ot:wOt, days:wDays });
     }
 
+    /* الاستحقاق المالي — يُقرَّب مجموع كل بند شهرياً، لا كل يوم على حدة */
+    var RT = rates();
+    var rReg = dayW ? RT.after : RT.shift;      // المناوب: ٤٠٠٠ لكل إضافيه بلا استثناء
+    var rHol = dayW ? RT.holiday : RT.shift;
+    var hReg = payHours(otReg), hHol = payHours(otHol);
+    var pay = {
+      lines: [],
+      hours: hReg + hHol,
+      amount: hReg*rReg + hHol*rHol
+    };
+    if(otReg > 0) pay.lines.push({ label: dayW ? "إضافي بعد نهاية الدوام" : "إضافي المناوبة",
+                                   mins:otReg, hours:hReg, rate:rReg, amount:hReg*rReg });
+    if(otHol > 0) pay.lines.push({ label:"دوام في العطل", mins:otHol, hours:hHol, rate:rHol, amount:hHol*rHol });
+
     return { emp:emp, ym:ym, rows:rows, scheduled:scheduled, worked:worked, restWorked:restWorked,
              base:base, ot:ot, total:base+ot, openShifts:openShifts,
-             carryIn:carryIn, carryOut:carryOut, weeks:weeks };
+             carryIn:carryIn, carryOut:carryOut, weeks:weeks,
+             otReg:otReg, otHol:otHol, pay:pay };
   }
 
   /* ============ بيانات تجريبية ============ */
@@ -624,6 +670,7 @@
     if(ui.tab === "today") view.innerHTML = viewToday();
     else if(ui.tab === "staff") view.innerHTML = viewStaff();
     else if(ui.tab === "calendar") view.innerHTML = viewCalendar();
+    else if(ui.tab === "rates") view.innerHTML = viewRates();
     else view.innerHTML = viewSheet();
     applyLock();
   }
@@ -659,7 +706,7 @@
           '<button class="btn btn-sm" data-act="day" data-v="-1">اليوم السابق</button>'+
           '<button class="btn btn-sm" data-act="day" data-v="0">اليوم</button>'+
           '<button class="btn btn-sm" data-act="day" data-v="1">اليوم التالي</button>'+
-        '</div></div></section>';
+        '</div></div>'+ holidayBar(d) +'</section>';
 
     if(!state.employees.length){
       return h + emptyState("لا يوجد موظفون بعد", "أضف أول موظف من تبويب «الموظفون» وحدّد تاريخ أول يوم دوام له.");
@@ -689,6 +736,21 @@
     h += resting.length ? resting.map(function(e){ return restCard(e, d); }).join("")
        : '<div class="soft" style="padding:12px;color:var(--muted);font-size:13px;margin-bottom:12px">لا يوجد موظف في الاستراحة اليوم.</div>';
     return h;
+  }
+
+  // تحديد اليوم المعروض عطلةً رسمية بضغطة واحدة — تُعلنها الدولة فجأةً فلا تقويم ثابتاً لها
+  function holidayBar(d){
+    var nm = holidayName(d);
+    if(nm){
+      return '<div class="soft" style="margin-top:10px;padding:9px 12px;border-color:var(--warn);'+
+        'display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'+
+        '<div style="font-size:13px"><span class="pill pill-ot">عطلة رسمية</span> '+ esc(nm) +'</div>'+
+        '<button class="btn btn-sm btn-danger" data-act="del-holiday" data-date="'+ d +'">إلغاء العطلة</button>'+
+      '</div>';
+    }
+    return '<div style="margin-top:10px">'+
+      '<button class="btn btn-sm" data-act="mark-holiday" data-date="'+ d +'">تحديد هذا اليوم عطلة رسمية</button>'+
+      '</div>';
   }
 
   function sectionTitle(t, sub){
@@ -832,7 +894,8 @@
     return '<article class="card" style="padding:12px 14px;margin-bottom:10px">'+
       '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">'+
         '<div><div style="font-weight:600">'+ esc(emp.name) +'</div>'+
-        '<div style="font-size:12px;color:var(--muted)">'+ esc(emp.dept||"—") +' · '+ (isDayWorker(emp) ? "عطلة" : "استراحة") +'</div></div>'+
+        '<div style="font-size:12px;color:var(--muted)">'+ esc(emp.dept||"—") +' · '+
+          (isHoliday(d) ? ("عطلة رسمية — "+ holidayName(d)) : (isDayWorker(emp) ? "عطلة" : "استراحة")) +'</div></div>'+
         (open ? "" : '<button class="btn btn-sm" data-act="add-rest" data-emp="'+emp.id+'" data-date="'+d+'">تسجيل دوام في يوم '+ (isDayWorker(emp) ? "عطلة" : "استراحة") +'</button>')+
       '</div>'+ body +'</article>';
   }
@@ -1005,6 +1068,118 @@
       '<div style="padding:10px 14px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)">د = يوم دوام · د+ = دوام مع ساعات إضافية · إ = دوام في يوم استراحة</div></section>';
   }
 
+  /* ---------- العطل الرسمية وأسعار الساعة ---------- */
+  function viewRates(){
+    var RT = rates();
+    var h = demoBanner();
+
+    // الأسعار: التعديل للمشرف وحده · العطل: يحدّدها أي موظف
+    if(ui.unlocked){
+      h += '<section class="card" style="padding:16px;margin-bottom:16px">'+
+        '<h2 style="font-size:15px;margin:0 0 4px">أسعار الساعة الإضافية</h2>'+
+        '<p style="font-size:12px;color:var(--muted);margin:0 0 12px">بالدينار العراقي لكل ساعة.</p>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">'+
+          '<div><label class="label" for="r_shift">المناوب</label><input id="r_shift" type="number" min="0" step="250" value="'+ RT.shift +'"></div>'+
+          '<div><label class="label" for="r_after">الصباحي بعد الدوام</label><input id="r_after" type="number" min="0" step="250" value="'+ RT.after +'"></div>'+
+          '<div><label class="label" for="r_hol">الدوام في العطل</label><input id="r_hol" type="number" min="0" step="250" value="'+ RT.holiday +'"></div>'+
+        '</div>'+
+        '<div style="margin-top:12px"><button class="btn btn-primary" data-act="save-rates">حفظ الأسعار</button></div>'+
+        '<p style="font-size:12px;color:var(--muted);margin:10px 0 0;line-height:1.9">'+
+        'سعر العطل يسري على الموظف الصباحي في العطل الرسمية وفي عطلته الأسبوعية. أما المناوب فكل ساعاته الإضافية بسعر واحد.</p>'+
+        '</section>';
+    } else {
+      h += '<section class="card" style="padding:16px;margin-bottom:16px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px">'+
+          '<h2 style="font-size:15px;margin:0">أسعار الساعة الإضافية</h2>'+
+          '<span style="font-size:12px;color:var(--muted)">تعديلها يحتاج رمز المشرف</span>'+
+        '</div>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">'+
+          rateTile("المناوب", RT.shift, "لكل ساعة إضافية") +
+          rateTile("الصباحي بعد الدوام", RT.after, "البقاء بعد نهاية الدوام") +
+          rateTile("الدوام في العطل", RT.holiday, "العطل الرسمية والأسبوعية") +
+        '</div></section>';
+    }
+
+    h += '<section class="card" style="padding:16px;margin-bottom:16px">'+
+      '<h2 style="font-size:15px;margin:0 0 4px">إضافة عطلة رسمية</h2>'+
+      '<p style="font-size:12px;color:var(--muted);margin:0 0 12px">اليوم المحدّد هنا يصبح عطلة للموظف الصباحي، فيُحتسب دوامه فيه كله بسعر العطل. ودورية المناوب لا تتأثر.</p>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:end">'+
+        '<div><label class="label" for="hol_date">التاريخ</label><input id="hol_date" type="date" value="'+ todayStr() +'"></div>'+
+        '<div><label class="label" for="hol_name">المناسبة</label><input id="hol_name" placeholder="مثال: عيد الفطر"></div>'+
+        '<div><button class="btn btn-primary" data-act="add-holiday">إضافة</button></div>'+
+      '</div></section>';
+
+    return h + holidayList(true);
+  }
+
+  function rateTile(label, val, sub){
+    return '<div class="soft" style="padding:12px 14px">'+
+      '<div class="label">'+ esc(label) +'</div>'+
+      '<div class="display tnum" style="font-size:22px;line-height:1.25">'+ val.toLocaleString("en-US") +'</div>'+
+      '<div style="font-size:11px;color:var(--muted)">'+ esc(sub) +'</div></div>';
+  }
+
+  function holidayList(editable){
+    var keys = Object.keys(state.holidays || {}).sort();
+    if(!keys.length){
+      return '<section class="soft" style="padding:18px;text-align:center;font-size:13px;color:var(--muted)">'+
+        'لا عطل رسمية مسجّلة بعد.</section>';
+    }
+    var byYear = {};
+    keys.forEach(function(k){ var y = k.slice(0,4); (byYear[y] = byYear[y] || []).push(k); });
+
+    var out = "";
+    Object.keys(byYear).sort().forEach(function(y){
+      out += '<h3 style="font-size:13px;margin:16px 0 8px;color:var(--muted)">سنة <span class="tnum">'+ y +'</span></h3>'+
+        '<div style="display:grid;gap:8px">';
+      byYear[y].forEach(function(k){
+        var past = k < todayStr();
+        out += '<div class="card" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap'+ (past ? ';opacity:.65' : '') +'">'+
+          '<div><div style="font-weight:600">'+ esc(state.holidays[k] || "عطلة رسمية") +'</div>'+
+          '<div style="font-size:12px;color:var(--muted)">'+ dayName(k) +' · '+ fmtDate(k) +'</div></div>'+
+          (editable ? '<button class="btn btn-sm btn-danger" data-act="del-holiday" data-date="'+ k +'">حذف</button>' : '')+
+        '</div>';
+      });
+      out += '</div>';
+    });
+    return '<section>'+ out +'</section>';
+  }
+
+  /* بطاقة الاستحقاق المالي للساعات الإضافية */
+  function payBlock(R){
+    var p = R.pay;
+    var rows = p.lines.map(function(l){
+      return '<tr><td style="text-align:right">'+ esc(l.label) +'</td>'+
+        '<td class="tnum">'+ fmtH(l.mins) +'</td>'+
+        '<td class="tnum" style="font-weight:700">'+ l.hours +'</td>'+
+        '<td class="tnum">'+ l.rate.toLocaleString("en-US") +'</td>'+
+        '<td class="tnum" style="font-weight:700">'+ l.amount.toLocaleString("en-US") +'</td></tr>';
+    }).join("");
+
+    return '<section class="soft" style="padding:0;overflow:hidden;margin-bottom:16px;border-color:var(--accent)">'+
+      '<div style="padding:14px 16px;background:var(--accent-soft);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'+
+        '<div><div class="label" style="color:var(--accent)">المبلغ المستحق عن الساعات الإضافية</div>'+
+        '<div class="display tnum" style="font-size:30px;line-height:1.2;color:var(--accent)">'+ fmtIQD(p.amount) +'</div></div>'+
+        '<div style="text-align:left;font-size:12px;color:var(--muted);line-height:1.8">'+
+          '<div>الساعات المحتسبة: <span class="tnum" style="font-weight:700;color:var(--ink)">'+ p.hours +'</span> ساعة</div>'+
+          '<div>الساعات المسجّلة: <span class="tnum">'+ fmtH(R.ot) +'</span></div>'+
+        '</div>'+
+      '</div>'+
+      (rows
+        ? '<div class="scroll-x"><table style="min-width:420px"><thead><tr>'+
+            '<th style="text-align:right">البند</th><th>الساعات المسجّلة</th><th>المحتسبة</th><th>سعر الساعة</th><th>المبلغ</th>'+
+          '</tr></thead><tbody>'+ rows +'</tbody>'+
+          '<tfoot><tr style="font-weight:700;background:var(--surface-2)">'+
+            '<td style="text-align:right">المجموع</td><td class="tnum">'+ fmtH(R.ot) +'</td>'+
+            '<td class="tnum">'+ p.hours +'</td><td>—</td>'+
+            '<td class="tnum" style="color:var(--accent)">'+ p.amount.toLocaleString("en-US") +'</td></tr></tfoot>'+
+          '</table></div>'
+        : '<div style="padding:12px 16px;font-size:13px;color:var(--muted)">لا ساعات إضافية في هذا الشهر.</div>')+
+      '<div style="padding:10px 16px;font-size:11.5px;color:var(--muted);border-top:1px solid var(--line);line-height:1.8">'+
+        'تُقرَّب الساعات عند الاحتساب: ما زاد على ٤٥ دقيقة يُعدّ ساعة كاملة، وما دونها يسقط. التقريب يقع على مجموع كل بند شهرياً لا على كل يوم.'+
+      '</div></section>';
+  }
+
   /* ---------- كشف الساعات ---------- */
   function viewSheet(){
     var h = demoBanner();
@@ -1073,6 +1248,7 @@
              : (R.restWorked ? ("تأخير + "+ R.restWorked +" يوم استراحة") : "تأخير ما بعد ٢٤ ساعة"), "var(--warn)") +
         tile("مجموع الساعات", fmtH(R.total), "أساسي + إضافي") +
       '</div>'+
+      payBlock(R) +
       '<div style="margin-bottom:16px">'+
         '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">'+
           '<h3 style="font-size:14px;margin:0">الساعات الإضافية حسب أسابيع الشهر</h3>'+
@@ -1233,11 +1409,57 @@
     if(a === "open-safari"){ closeModal(); window.open(location.href, "_blank"); return; }
 
     if(a === "backup"){
-      var data = JSON.stringify({ employees:state.employees, records:state.records }, null, 2);
+      var data = JSON.stringify({ employees:state.employees, records:state.records,
+                                  rates:rates(), holidays:state.holidays || {} }, null, 2);
       copyText(data, el); return;
     }
     if(a === "restore-open"){ openRestore(); return; }
     if(a === "set-pin"){ openPinChange(); return; }
+
+    if(a === "save-rates"){
+      var rs = Math.max(0, Number(document.getElementById("r_shift").value) || 0);
+      var ra = Math.max(0, Number(document.getElementById("r_after").value) || 0);
+      var rh = Math.max(0, Number(document.getElementById("r_hol").value) || 0);
+      if(!rs || !ra || !rh){ flash("أدخل سعراً صحيحاً للبنود الثلاثة."); return; }
+      state.rates = { shift:rs, after:ra, holiday:rh };
+      save(); render(); flash("حُفظت الأسعار.");
+      return;
+    }
+    if(a === "add-holiday"){
+      var hd = document.getElementById("hol_date").value;
+      var hn = (document.getElementById("hol_name").value || "").trim();
+      if(!hd){ flash("اختر تاريخ العطلة."); return; }
+      state.holidays = state.holidays || {};
+      state.holidays[hd] = hn || "عطلة رسمية";
+      save(); render(); flash("أُضيفت عطلة "+ fmtDate(hd) +".");
+      return;
+    }
+    if(a === "mark-holiday"){
+      var hdate = el.dataset.date;
+      openModal('<h2 style="font-size:16px;margin:0 0 8px">تحديد عطلة رسمية</h2>'+
+        '<p style="font-size:13px;color:var(--muted);margin:0 0 12px;line-height:1.9">'+
+        esc(dayName(hdate)) +' · '+ esc(fmtDate(hdate)) +'<br>'+
+        'سيصبح هذا اليوم عطلة للموظفين الصباحيين، ويُحتسب دوامهم فيه بسعر العطل. ودورية المناوب لا تتأثر.</p>'+
+        '<label class="label" for="qhol_name">المناسبة</label>'+
+        '<input id="qhol_name" placeholder="مثال: عيد الجيش — اتركه فارغاً إن لم تُسمَّ">'+
+        '<div style="display:flex;gap:8px;margin-top:12px">'+
+          '<button class="btn btn-primary" data-act="mark-holiday-ok" data-date="'+ hdate +'">تأكيد</button>'+
+          '<button class="btn" data-act="modal-close">إلغاء</button>'+
+        '</div>');
+      return;
+    }
+    if(a === "mark-holiday-ok"){
+      var md = el.dataset.date;
+      var mn = (document.getElementById("qhol_name").value || "").trim();
+      state.holidays = state.holidays || {};
+      state.holidays[md] = mn || "عطلة رسمية";
+      save(); closeModal(); render(); flash("حُدِّد "+ fmtDate(md) +" عطلة رسمية.");
+      return;
+    }
+    if(a === "del-holiday"){
+      if(state.holidays) delete state.holidays[el.dataset.date];
+      save(); render(); return;
+    }
     if(a === "modal-close"){ closeModal(); return; }
     if(a === "restore-apply"){
       var txt = document.getElementById("restore_txt").value;
@@ -1245,6 +1467,7 @@
         var d = JSON.parse(txt);
         if(!d || !Array.isArray(d.employees)) throw new Error("bad");
         state.employees = d.employees; state.records = d.records || {}; state.demo = false;
+        state.rates = d.rates || null; state.holidays = d.holidays || {};
         save(); closeModal(); render(); flash("تمت استعادة البيانات.");
       }catch(e){ document.getElementById("restore_err").textContent = "النص غير صالح — الصق نسخة احتياطية كاملة بصيغة JSON."; }
       return;
@@ -1331,8 +1554,9 @@
     var y = Number(R.ym.split("-")[0]), m = Number(R.ym.split("-")[1]) - 1;
     var rows = R.rows, dayW = isDayWorker(R.emp);
     var ROW_H = 46, HEAD_H = 52;
-    // ارتفاع سخيّ: الترويسة والبطاقات والأسابيع ورأس الجدول وأسطره والمجموع والتواقيع
-    var bodyH = 860 + HEAD_H + rows.length*ROW_H + ROW_H + 220;
+    var breaks = [];
+    // ارتفاع سخيّ: الترويسة والبطاقات والاستحقاق والأسابيع ورأس الجدول وأسطره والمجموع والتواقيع
+    var bodyH = 860 + 300 + HEAD_H + rows.length*ROW_H + ROW_H + 220;
     var H = Math.max(PG_H, bodyH);
 
     var cv = document.createElement("canvas");
@@ -1381,6 +1605,46 @@
     tileBox(L0, cw, bh, "مجموع الساعات", fmtH(R.total), "أساسي + إضافي");
     cy += bh + 26;
 
+    /* الاستحقاق المالي */
+    var P = R.pay;
+    var payH = 92 + (P.lines.length ? (34 + P.lines.length*32 + 34) : 30);
+    box(ctx, L0, cy, W, payH, "#ffffff", C_ACCENT, 12);
+    box(ctx, L0, cy, W, 92, "#e0efe9", C_ACCENT, 12);
+    txtR(ctx, "المبلغ المستحق عن الساعات الإضافية", R0 - 16, cy + 28, 18, C_ACCENT, 600);
+    txtR(ctx, fmtIQD(P.amount), R0 - 16, cy + 64, 36, C_ACCENT, 700);
+    txtL(ctx, "الساعات المحتسبة: "+ P.hours +" ساعة", L0 + 16, cy + 36, 16, C_MUTED, 400);
+    txtL(ctx, "الساعات المسجّلة: "+ fmtH(R.ot), L0 + 16, cy + 62, 16, C_MUTED, 400);
+    var py = cy + 92;
+
+    if(P.lines.length){
+      var pf = [0.34, 0.17, 0.15, 0.17, 0.17], pxs = [], pacc = R0;
+      pf.forEach(function(f){ var w2 = W*f; pxs.push({ x:pacc - w2, w:w2 }); pacc -= w2; });
+      var pheads = ["البند","الساعات المسجّلة","المحتسبة","سعر الساعة","المبلغ"];
+      ctx.fillStyle = C_SOFT; ctx.fillRect(L0+1, py, W-2, 34);
+      pheads.forEach(function(hd, i){ txtC(ctx, hd, pxs[i].x + pxs[i].w/2, py + 17, 14, C_MUTED, 600); });
+      py += 34;
+      P.lines.forEach(function(l){
+        hline(ctx, L0+1, R0-1, py, C_LINE, 1);
+        txtR(ctx, fit(ctx, l.label, 15, 400, pxs[0].w - 24), pxs[0].x + pxs[0].w - 12, py + 16, 15, C_INK, 400);
+        txtC(ctx, fmtH(l.mins), pxs[1].x + pxs[1].w/2, py + 16, 15, C_INK, 400, true);
+        txtC(ctx, String(l.hours), pxs[2].x + pxs[2].w/2, py + 16, 15, C_INK, 700, true);
+        txtC(ctx, l.rate.toLocaleString("en-US"), pxs[3].x + pxs[3].w/2, py + 16, 15, C_INK, 400, true);
+        txtC(ctx, l.amount.toLocaleString("en-US"), pxs[4].x + pxs[4].w/2, py + 16, 15, C_ACCENT, 700, true);
+        py += 32;
+      });
+      hline(ctx, L0+1, R0-1, py, C_LINE, 1);
+      ctx.fillStyle = C_SOFT; ctx.fillRect(L0+1, py, W-2, 33);
+      txtR(ctx, "المجموع", pxs[0].x + pxs[0].w - 12, py + 17, 15, C_INK, 700);
+      txtC(ctx, String(P.hours), pxs[2].x + pxs[2].w/2, py + 17, 15, C_INK, 700, true);
+      txtC(ctx, P.amount.toLocaleString("en-US"), pxs[4].x + pxs[4].w/2, py + 17, 15, C_ACCENT, 700, true);
+    } else {
+      txtR(ctx, "لا ساعات إضافية في هذا الشهر.", R0 - 16, py + 16, 15, C_MUTED, 400);
+    }
+    cy += payH + 12;
+    txtR(ctx, "تُقرَّب الساعات: ما زاد على ٤٥ دقيقة يُعدّ ساعة كاملة، وما دونها يسقط.", R0, cy, 13, C_MUTED, 400);
+    cy += 26;
+    breaks.push(cy);
+
     /* الإضافي حسب الأسابيع */
     txtR(ctx, "الساعات الإضافية حسب أسابيع الشهر", R0, cy + 10, 20, C_INK, 700);
     cy += 32;
@@ -1404,7 +1668,6 @@
     var xs = [], acc = R0;
     frac.forEach(function(f){ var w2 = W*f; xs.push({ x:acc - w2, w:w2 }); acc -= w2; });
 
-    var breaks = [];
     box(ctx, L0, cy, W, HEAD_H, C_SOFT, C_LINE, 8);
     heads.forEach(function(hd, i){ txtC(ctx, hd, xs[i].x + xs[i].w/2, cy + HEAD_H/2, 15, C_MUTED, 600); });
     cy += HEAD_H;
