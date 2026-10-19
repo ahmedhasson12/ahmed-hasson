@@ -249,6 +249,7 @@
   /* ============ التخزين ============ */
   var KEY = "shift_attendance_v1";
   var DEF_RATES = { shift:4000, after:4000, holiday:5000 };   // دينار عراقي للساعة
+  var DEF_QUOTA = 154;        // ساعات الدوام الأساسية الشهرية للمناوب · ما زاد عليها إضافي
   var state = { employees:[], records:{}, demo:false, rates:null, holidays:{},
                 tombs:{}, sync:null, settingsU:0, device:null };
   var ui = { tab:"today", day:todayStr(), calMonth:monthStr(new Date()), calEmp:"all",
@@ -467,7 +468,9 @@
         // لا نكتب فوق تعديل محلي لم يُدفع بعد
         if(local && local.u > (m.pushedAt || 0)) return;
         if(row.deleted){ delete state.records[k]; return; }
+        var keepR = state.records[k] && state.records[k].r;   // أختام البصمات محليّة، لا تُرفع
         state.records[k] = { type:row.type, t:row.t, extra:!!row.extra, u:row.u || Date.now() };
+        if(keepR) state.records[k].r = keepR;
       });
       return stage("سحب الموظفين", sFetch("employees?" + q + mine + "&order=updated_at.asc&limit=2000"));
     }).then(function(rows){
@@ -525,7 +528,9 @@
     var r = state.rates || {};
     return { shift: Number(r.shift) || DEF_RATES.shift,
              after: Number(r.after) || DEF_RATES.after,
-             holiday: Number(r.holiday) || DEF_RATES.holiday };
+             holiday: Number(r.holiday) || DEF_RATES.holiday,
+             // صفر يعني بلا حد أساسي · القيمة بالساعات
+             quota: (r.quota == null || r.quota === "") ? DEF_QUOTA : Math.max(0, Number(r.quota) || 0) };
   }
   function holidayName(ds){
     var h = state.holidays || {};
@@ -627,15 +632,40 @@
   var MIN_GAP = 3 * 60;        // وجبة المناوب: البصمات متباعدة ٧–٩ ساعات طبيعياً
   var MIN_GAP_DAY = 30;        // الدوام الصباحي: بين الدخول والخروج
 
-  function gapProblem(rec, slot, hm, type){
+  /* اللحظة الحقيقية لبصمة سابقة، بالمللي ثانية.
+     البصمة قد تكون من أمس (وجبة ٢٤ ساعة)، فمقارنة عقارب الساعة وحدها تُضلّل:
+     ٠٨:٠٠ أمس و١٠:٣٠ اليوم تبدو ساعتين ونصفاً وهي في الحقيقة ٢٦ ساعة ونصف. */
+  function punchAt(rec, i, ds, type){
+    if(rec.r && rec.r[i]) return rec.r[i];      // الختم المسجَّل وقت الضغط: الأدقّ
+    var m = mins(rec.t[i]);
+    if(m === null) return null;
+    // البصمات الثلاث الأولى في يوم السجل · الرابعة في صباح اليوم التالي
+    var off = 0;
+    if(i === 3){
+      if(type === "duty" || !type) off = 1;
+      else { var p = mins(rec.t[2]); if(p !== null && m < p) off = 1; }   // مبيت الصباحي
+    }
+    var d = parseD(ds); d.setHours(0,0,0,0);
+    d.setDate(d.getDate() + off);
+    return d.getTime() + m*60000;
+  }
+
+  function gapProblem(rec, slot, hm, type, ds){
     if(!rec || slot === 0) return null;
     var gap = (type === "duty") ? MIN_GAP : MIN_GAP_DAY;
-    var now = mins(hm);
+    var now = mins(hm), nowMs = Date.now();
     for(var i = slot - 1; i >= 0; i--){
       var prev = mins(rec.t[i]);
       if(prev === null) continue;
-      var diff = now - prev;
-      if(diff < 0) diff += 24*60;              // عبَر منتصف الليل
+      var diff;
+      if(ds){
+        var pm = punchAt(rec, i, ds, type);
+        diff = Math.round((nowMs - pm) / 60000);
+        if(diff < 0) return null;                // ساعة الجهاز متقدّمة: لا نمنع بصمة صحيحة
+      } else {
+        diff = now - prev;
+        if(diff < 0) diff += 24*60;              // عبَر منتصف الليل
+      }
       if(diff < gap){
         return "لم يمضِ إلا "+ fmtH(diff) +" على البصمة السابقة ("+ rec.t[i] +")، "+
                "والمطلوب "+ fmtH(gap) +" على الأقل قبل البصمة التالية.";
@@ -648,11 +678,13 @@
   // سجل مشبوه: بصمتان متتاليتان بينهما أقل من الحد الأدنى
   function tooClose(rec, type){
     if(!rec) return false;
-    var gap = (type === "duty" || !type) ? MIN_GAP : MIN_GAP_DAY;
+    var duty = (type === "duty" || !type);
+    var gap = duty ? MIN_GAP : MIN_GAP_DAY;
     var prev = null;
     for(var i=0;i<4;i++){
       var v = mins(rec.t[i]);
       if(v === null) continue;
+      if(duty && i === 3) v += 24*60;          // البصمة الرابعة في صباح اليوم التالي
       if(prev !== null){
         var d = v - prev; if(d < 0) d += 24*60;
         if(d < gap) return true;
@@ -794,6 +826,30 @@
       ds = addDays(ds, 1);
     }
 
+    /* ===== الأساس الشهري للمناوب =====
+       ساعات الدوام الاعتيادي أساسُها ١٥٤ ساعة في الشهر. ما زاد عليها
+       يتحوّل إضافياً تلقائياً، ويُنسب إلى اليوم الذي تجاوز به الأساس. */
+    var quotaM = dayW ? 0 : Math.round(rates().quota * 60);
+    var overQuota = 0, overBy = {};
+    if(quotaM > 0){
+      var acc = 0;
+      rows.forEach(function(r){
+        if(!r.base) return;
+        acc += r.base;
+        if(acc <= quotaM) return;
+        var over = Math.min(r.base, acc - quotaM);
+        r.base -= over; r.ot += over; r.over = over;
+        overQuota += over;
+        overBy[r.date] = (overBy[r.date] || 0) + over;
+        // تبقى الملاحظة قصيرة لئلا تُقتطع في عمود الكشف المطبوع
+        var pre = (r.note && r.note !== "مكتملة")
+          ? r.note.replace("إضافي بعد ٢٤ ساعة", "بعد ٢٤س إضافي") + " · " : "";
+        r.note = pre + "فوق الأساس " + fmtH(over);
+      });
+      base -= overQuota; ot += overQuota; otReg += overQuota;
+    }
+    var quotaShort = quotaM > 0 ? Math.max(0, quotaM - base) : 0;
+
     // توزيع الساعات الإضافية على أسابيع الشهر (١-٧، ٨-١٤، ١٥-٢١، ٢٢-٢٨، وبقية الشهر)
     var WEEK_NAMES = ["الأسبوع الأول","الأسبوع الثاني","الأسبوع الثالث","الأسبوع الرابع"];
     var bounds = [[1,7],[8,14],[15,21],[22,28],[29,31]];
@@ -805,7 +861,7 @@
       var wOt = 0, wDays = 0;
       for(var dd=a; dd<=b; dd++){
         var wds = key(new Date(y, m, dd, 12));
-        wOt += otOnDate(empId, wds);
+        wOt += otOnDate(empId, wds) + (overBy[wds] || 0);
         if(isDutyDay(emp, wds)){
           var wr = getRec(empId, wds);
           if(wr && dutyStats(wr).started) wDays++;
@@ -825,13 +881,15 @@
       hours: hReg + hHol,
       amount: hReg*rReg + hHol*rHol
     };
-    if(otReg > 0) pay.lines.push({ label: dayW ? "إضافي بعد نهاية الدوام" : "إضافي المناوبة",
+    if(otReg > 0) pay.lines.push({ label: dayW ? "إضافي بعد نهاية الدوام"
+                                     : (overQuota > 0 ? "إضافي المناوبة + ما فوق الأساس" : "إضافي المناوبة"),
                                    mins:otReg, hours:hReg, rate:rReg, amount:hReg*rReg });
     if(otHol > 0) pay.lines.push({ label:"دوام في العطل", mins:otHol, hours:hHol, rate:rHol, amount:hHol*rHol });
 
     return { emp:emp, ym:ym, rows:rows, scheduled:scheduled, worked:worked, restWorked:restWorked,
              base:base, ot:ot, total:base+ot, openShifts:openShifts,
              carryIn:carryIn, carryOut:carryOut, weeks:weeks,
+             quota:quotaM, over:overQuota, quotaShort:quotaShort,
              otReg:otReg, otHol:otHol, pay:pay };
   }
 
@@ -1068,6 +1126,14 @@
     var s = dutyStats(rec);
     var nextEmpty = -1;
     for(var i=0;i<4;i++){ if(!(rec && rec.t[i])){ nextEmpty = i; break; } }
+    /* بصمة نهاية الوجبة: إن كانت البطاقة لوجبة الأمس فالمطلوب بصمة الخروج،
+       لا بصمةٌ فائتة في منتصف الوجبة. وإلا سُجّل خروجُه في خانة الوسطية. */
+    var quickSlot = nextEmpty;
+    var missed = false;
+    if(isEnding && nextEmpty >= 0 && !(rec && rec.t[3])){
+      quickSlot = 3;
+      missed = nextEmpty !== 3;
+    }
 
     var chips = SLOTS.map(function(sl){
       var val = rec ? rec.t[sl.i] : null;
@@ -1086,8 +1152,10 @@
     else if(s.started) status = '<span class="pill pill-duty">الوجبة جارية</span>';
     else status = '<span class="pill pill-rest">بانتظار البصمة</span>';
 
-    var quick = nextEmpty >= 0
-      ? '<button class="btn btn-primary" data-act="now" data-emp="'+ emp.id +'" data-date="'+ shiftDate +'" data-slot="'+ nextEmpty +'" data-type="duty">بصمة سريعة · '+ esc(SLOTS[nextEmpty].name) +'</button>'
+    var quick = quickSlot >= 0
+      ? '<button class="btn btn-primary" data-act="now" data-emp="'+ emp.id +'" data-date="'+ shiftDate +'" data-slot="'+ quickSlot +'" data-type="duty">بصمة سريعة · '+ esc(SLOTS[quickSlot].name) +'</button>'+
+        (missed ? '<div style="font-size:12px;color:var(--warn);margin-top:8px;line-height:1.9">'+
+          'هناك بصمة فائتة في منتصف الوجبة — لا تمنع بصمة الخروج، ويُدخلها المشرف لاحقاً.</div>' : '')
       : '<span class="pill pill-duty">اكتملت البصمات الأربع</span>';
 
     return '<article class="card" style="padding:14px;margin-bottom:12px">'+
@@ -1350,10 +1418,12 @@
           '<div><label class="label" for="r_shift">المناوب</label><input id="r_shift" type="number" min="0" step="250" value="'+ RT.shift +'"></div>'+
           '<div><label class="label" for="r_after">الصباحي بعد الدوام</label><input id="r_after" type="number" min="0" step="250" value="'+ RT.after +'"></div>'+
           '<div><label class="label" for="r_hol">الدوام في العطل</label><input id="r_hol" type="number" min="0" step="250" value="'+ RT.holiday +'"></div>'+
+          '<div><label class="label" for="r_quota">الأساس الشهري للمناوب (ساعة)</label><input id="r_quota" type="number" min="0" step="1" value="'+ RT.quota +'"></div>'+
         '</div>'+
         '<div style="margin-top:12px"><button class="btn btn-primary" data-act="save-rates">حفظ الأسعار</button></div>'+
         '<p style="font-size:12px;color:var(--muted);margin:10px 0 0;line-height:1.9">'+
-        'سعر العطل يسري على الموظف الصباحي في العطل الرسمية وفي عطلته الأسبوعية. أما المناوب فكل ساعاته الإضافية بسعر واحد.</p>'+
+        'سعر العطل يسري على الموظف الصباحي في العطل الرسمية وفي عطلته الأسبوعية. أما المناوب فكل ساعاته الإضافية بسعر واحد. '+
+        'والأساس الشهري حدُّ ساعات الدوام الاعتيادي: ما زاد عليه يتحوّل إضافياً تلقائياً. صفر يعني بلا حد.</p>'+
         '</section>';
     } else {
       h += '<section class="card" style="padding:16px;margin-bottom:16px">'+
@@ -1365,6 +1435,7 @@
           rateTile("المناوب", RT.shift, "لكل ساعة إضافية") +
           rateTile("الصباحي بعد الدوام", RT.after, "البقاء بعد نهاية الدوام") +
           rateTile("الدوام في العطل", RT.holiday, "العطل الرسمية والأسبوعية") +
+          (RT.quota ? rateTile("الأساس الشهري للمناوب", RT.quota, "ساعة · ما زاد عليها إضافي") : "") +
         '</div></section>';
     }
 
@@ -1545,10 +1616,16 @@
               : 'مناوب · ٢٤ ساعة ثم ٣ أيام استراحة') +'</div></div>'+
         tile("أيام الدوام الفعلي", R.worked, "من "+ R.scheduled +" يوم مجدول") +
         tile("أيام بلا بصمات", Math.max(0, R.scheduled - R.worked), "تحتاج مراجعة") +
-        tile("الساعات الأساسية", fmtH(R.base), "ساعة:دقيقة") +
+        tile("الساعات الأساسية", fmtH(R.base), R.quota ? ("الأساس الشهري "+ fmtH(R.quota)) : "ساعة:دقيقة") +
+        (R.quota ? (R.over > 0
+            ? tile("فوق الأساس الشهري", fmtH(R.over), "تحوّلت إلى إضافي تلقائياً", "var(--warn)")
+            : (R.quotaShort > 0
+               ? tile("متبقٍ لبلوغ الأساس", fmtH(R.quotaShort), "من "+ fmtH(R.quota) +" ساعة أساسية")
+               : tile("الأساس الشهري", fmtH(R.quota), "مُستوفى بالكامل"))) : "") +
         tile("الساعات الإضافية", fmtH(R.ot),
-             R.carryIn ? ("يشمل "+ fmtH(R.carryIn) +" مُرحّلة من الشهر السابق")
-             : (R.restWorked ? ("تأخير + "+ R.restWorked +" يوم استراحة") : "تأخير ما بعد ٢٤ ساعة"), "var(--warn)") +
+             R.over > 0 ? ("يشمل "+ fmtH(R.over) +" فوق الأساس")
+             : (R.carryIn ? ("يشمل "+ fmtH(R.carryIn) +" مُرحّلة من الشهر السابق")
+             : (R.restWorked ? ("تأخير + "+ R.restWorked +" يوم استراحة") : "تأخير ما بعد ٢٤ ساعة")), "var(--warn)") +
         tile("مجموع الساعات", fmtH(R.total), "أساسي + إضافي") +
       '</div>'+
       payBlock(R) +
@@ -1654,7 +1731,7 @@
       var type = el.dataset.type;
       var slot = Number(el.dataset.slot);
       var rec = ensureRec(el.dataset.emp, el.dataset.date, type);
-      var bad = gapProblem(rec, slot, nowHM(), type);
+      var bad = gapProblem(rec, slot, nowHM(), type, el.dataset.date);
       if(bad && !ui.unlocked){
         dropIfEmpty(el.dataset.emp, el.dataset.date);
         openModal('<h2 style="font-size:16px;margin:0 0 8px">بصمة مبكّرة جداً</h2>'+
@@ -1664,7 +1741,11 @@
           '<div style="display:flex;gap:8px"><button class="btn" data-act="modal-close">حسناً</button></div>');
         return;
       }
-      rec.t[slot] = nowHM(); sTouch(rec);
+      rec.t[slot] = nowHM();
+      // ختم اللحظة الحقيقية: به يُقاس تباعد البصمات بدل عقارب الساعة
+      if(!rec.r) rec.r = [null,null,null,null];
+      rec.r[slot] = Date.now();
+      sTouch(rec);
       state.demo = false; save(); render(); syncNow(true); return;
     }
     if(a === "add-rest"){ sTouch(ensureRec(el.dataset.emp, el.dataset.date, "rest")); save(); render(); return; }
@@ -1770,9 +1851,11 @@
       var rs = Math.max(0, Number(document.getElementById("r_shift").value) || 0);
       var ra = Math.max(0, Number(document.getElementById("r_after").value) || 0);
       var rh = Math.max(0, Number(document.getElementById("r_hol").value) || 0);
+      var qEl = document.getElementById("r_quota");
+      var rq = qEl ? Math.max(0, Number(qEl.value) || 0) : rates().quota;
       if(!rs || !ra || !rh){ flash("أدخل سعراً صحيحاً للبنود الثلاثة."); return; }
-      state.rates = { shift:rs, after:ra, holiday:rh }; state.settingsU = Date.now();
-      save(); render(); syncNow(true); flash("حُفظت الأسعار.");
+      state.rates = { shift:rs, after:ra, holiday:rh, quota:rq }; state.settingsU = Date.now();
+      save(); render(); syncNow(true); flash("حُفظت الأسعار والأساس الشهري.");
       return;
     }
     if(a === "add-holiday"){
@@ -1950,9 +2033,12 @@
     tileBox(L0, cw, bh, "أيام بلا بصمات", String(Math.max(0, R.scheduled - R.worked)), "تحتاج مراجعة");
     cy += bh + gap;
 
-    tileBox(R0 - cw, cw, bh, "الساعات الأساسية", fmtH(R.base), "ساعة:دقيقة");
+    tileBox(R0 - cw, cw, bh, "الساعات الأساسية", fmtH(R.base),
+            R.quota ? ("الأساس الشهري "+ fmtH(R.quota) + (R.quotaShort > 0 ? " · ناقص "+ fmtH(R.quotaShort) : ""))
+                    : "ساعة:دقيقة");
     tileBox(R0 - cw*2 - gap, cw, bh, "الساعات الإضافية", fmtH(R.ot),
-            R.carryIn ? ("يشمل "+ fmtH(R.carryIn) +" مُرحّلة") : "تأخير ودوام العطل", C_WARN);
+            R.over > 0 ? ("يشمل "+ fmtH(R.over) +" فوق الأساس")
+            : (R.carryIn ? ("يشمل "+ fmtH(R.carryIn) +" مُرحّلة") : "تأخير ودوام العطل"), C_WARN);
     tileBox(L0, cw, bh, "مجموع الساعات", fmtH(R.total), "أساسي + إضافي");
     cy += bh + 26;
 
@@ -1994,6 +2080,11 @@
     cy += payH + 12;
     txtR(ctx, "تُقرَّب الساعات: ما زاد على ٤٥ دقيقة يُعدّ ساعة كاملة، وما دونها يسقط.", R0, cy, 13, C_MUTED, 400);
     cy += 26;
+    if(R.over > 0){
+      txtR(ctx, "بلغ الدوام الاعتيادي أساسَ الشهر ("+ fmtH(R.quota) +")، فتحوّلت "+ fmtH(R.over) +" إلى إضافي.",
+           R0, cy, 13, C_WARN, 600);
+      cy += 24;
+    }
     breaks.push(cy);
 
     /* الإضافي حسب الأسابيع */
