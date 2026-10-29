@@ -917,7 +917,8 @@
       var wOt = 0, wDays = 0;
       for(var dd=a; dd<=b; dd++){
         var wds = key(new Date(y, m, dd, 12));
-        wOt += otOnDate(empId, wds) + (overBy[wds] || 0);
+        // ساعات «فوق الأساس الشهري» لها مربّعها المستقل، فلا تدخل في أسبوعٍ
+        wOt += otOnDate(empId, wds);
         if(isDutyDay(emp, wds)){
           var wr = getRec(empId, wds);
           if(wr && dutyStats(wr).started) wDays++;
@@ -1771,7 +1772,20 @@
               '<div style="font-size:11px;color:var(--muted)">الأيام <span class="num">'+ w.from +'–'+ w.to +'</span> · <span class="num">'+ w.days +'</span> يوم دوام</div>'+
             '</div>';
           }).join("") +
+          // بند قائم بذاته: لا يخصّ أسبوعاً بعينه بل الشهر كلّه
+          (R.quota ? '<div class="soft" style="padding:10px 12px;border-style:dashed'+
+              (R.over > 0 ? ';border-color:var(--warn)' : '') +'">'+
+              '<div class="label">فوق الأساس الشهري</div>'+
+              '<div class="display num" style="font-size:20px;line-height:1.25;color:'+
+                (R.over > 0 ? "var(--warn)" : "var(--muted)") +'">'+ fmtH(R.over) +'</div>'+
+              '<div style="font-size:11px;color:var(--muted)">ما زاد على <span class="num">'+ fmtH(R.quota) +'</span> ساعة</div>'+
+            '</div>' : "") +
         '</div>'+
+        (R.quota && R.over > 0
+          ? '<p style="font-size:11.5px;color:var(--muted);margin:8px 2px 0;line-height:1.8">'+
+            'مجموع الأسابيع <span class="num">'+ fmtH(R.ot - R.over) +'</span> + فوق الأساس <span class="num">'+ fmtH(R.over) +'</span>'+
+            ' = <span class="num">'+ fmtH(R.ot) +'</span>. وساعات التجاوز لا تُنسب إلى أسبوع لأنها حصيلة الشهر كلّه.</p>'
+          : "")+
       '</div>'+
       (R.openShifts ? '<div class="soft" style="padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--warn)">هناك '+ R.openShifts +' وجبة بدون بصمة نهاية — لن تُحتسب ساعاتها حتى تُسجَّل.</div>' : '')+
       '<div class="scroll-x"><table class="sheet-table">'+
@@ -2223,17 +2237,29 @@
     /* الإضافي حسب الأسابيع */
     txtR(ctx, "الساعات الإضافية حسب أسابيع الشهر", R0, cy + 10, 20, C_INK, 700);
     cy += 32;
-    var n = R.weeks.length, wgap = 10, ww = (W - wgap*(n-1)) / n, wh = 92;
-    R.weeks.forEach(function(w, i){
-      var x = R0 - ww - i*(ww + wgap);
-      var hot = w.ot > 0;
-      box(ctx, x, cy, ww, wh, hot ? C_WSOFT : C_SOFT, hot ? C_WARN : C_LINE);
-      txtR(ctx, w.label, x + ww - 12, cy + 22, 15, C_MUTED, 600);
-      txtR(ctx, fmtH(w.ot), x + ww - 12, cy + 52, 28, hot ? C_WARN : C_MUTED, 700);
-      txtR(ctx, fit(ctx, "الأيام "+ w.from +"–"+ w.to +" · "+ w.days +" يوم دوام", 13, 400, ww - 24),
-           x + ww - 12, cy + 76, 13, C_MUTED, 400);
+    // مربّعات الأسابيع، يليها مربّع «فوق الأساس الشهري» وهو بند الشهر كلّه لا أسبوعٍ بعينه
+    var boxes = R.weeks.map(function(w){
+      return { label:w.label, mins:w.ot, sub:"الأيام "+ w.from +"–"+ w.to +" · "+ w.days +" يوم دوام" };
     });
-    cy += wh + 26;
+    if(R.quota) boxes.push({ label:"فوق الأساس الشهري", mins:R.over,
+                             sub:"ما زاد على "+ fmtH(R.quota) +" ساعة" });
+
+    var n = boxes.length, wgap = 9, ww = (W - wgap*(n-1)) / n, wh = 92;
+    boxes.forEach(function(w, i){
+      var x = R0 - ww - i*(ww + wgap);
+      var hot = w.mins > 0;
+      box(ctx, x, cy, ww, wh, hot ? C_WSOFT : C_SOFT, hot ? C_WARN : C_LINE);
+      txtR(ctx, fit(ctx, w.label, 14, 600, ww - 20), x + ww - 10, cy + 22, 14, C_MUTED, 600);
+      txtR(ctx, fmtH(w.mins), x + ww - 10, cy + 52, 26, hot ? C_WARN : C_MUTED, 700);
+      txtR(ctx, fit(ctx, w.sub, 12, 400, ww - 20), x + ww - 10, cy + 76, 12, C_MUTED, 400);
+    });
+    cy += wh + 8;
+    if(R.quota && R.over > 0){
+      txtR(ctx, "مجموع الأسابيع "+ fmtH(R.ot - R.over) +" + فوق الأساس "+ fmtH(R.over) +" = "+ fmtH(R.ot) +
+           " · ساعات التجاوز حصيلة الشهر كلّه فلا تُنسب إلى أسبوع.", R0, cy + 10, 13, C_MUTED, 400);
+      cy += 20;
+    }
+    cy += 18;
 
     /* الجدول */
     var heads = dayW
